@@ -26,9 +26,9 @@ class WolfSheep {
     this.wolf.push(new Cheese(2, 0, "wolf", 30));
     this.wolf.push(new Cheese(4, 0, "wolf", 30));
 
-    for (let i = 0; i < 3; i++) {
-      for (let j = 0; j < 5; j++) {
-        this.sheep.push(new Cheese(j, i + 2, "sheep", 20));
+    for (let x = 0; x < 5; x++) {
+      for (let y = 0; y < 3; y++) {
+        this.sheep.push(new Cheese(x, y + 2, "sheep", 20));
       }
     }
   }
@@ -89,10 +89,9 @@ class Example extends Phaser.Scene {
     this.wolfsheep.wolf.forEach((cheese) => {
       cheese.graphics = this.add.graphics();
       cheese.graphics.fillStyle(0xff0000, 1); // Red for wolf
-      cheese.graphics.fillRect(
-        this.positions[cheese.x][cheese.y].x - cheese.size / 2,
-        this.positions[cheese.x][cheese.y].y - cheese.size / 2,
-        cheese.size,
+      cheese.graphics.fillCircle(
+        this.positions[cheese.x][cheese.y].x,
+        this.positions[cheese.x][cheese.y].y,
         cheese.size
       );
     });
@@ -100,10 +99,9 @@ class Example extends Phaser.Scene {
     this.wolfsheep.sheep.forEach((cheese) => {
       cheese.graphics = this.add.graphics();
       cheese.graphics.fillStyle(0x00ff00, 1); // Green for sheep
-      cheese.graphics.fillRect(
-        this.positions[cheese.x][cheese.y].x - cheese.size / 2,
-        this.positions[cheese.x][cheese.y].y - cheese.size / 2,
-        cheese.size,
+      cheese.graphics.fillCircle(
+        this.positions[cheese.x][cheese.y].x,
+        this.positions[cheese.x][cheese.y].y,
         cheese.size
       );
     });
