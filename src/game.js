@@ -1,5 +1,70 @@
 import Phaser from "phaser";
 
+// ─── Sound Effects ────────────────────────────────────────────────────────────
+
+// Synthesized via Web Audio API — no external audio assets required.
+// AudioContext starts suspended until resumed inside a user-gesture call stack,
+// which _ensureCtx() does on every call (cheap no-op once already running).
+class SFX {
+  constructor() {
+    this.ctx = null;
+  }
+
+  _ensureCtx() {
+    if (!this.ctx) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AudioCtx();
+    }
+    if (this.ctx.state === "suspended") this.ctx.resume();
+    return this.ctx;
+  }
+
+  _tone({ freq, startFreq, endFreq, duration, type = "sine", gain = 0.15, delay = 0 }) {
+    const ctx = this._ensureCtx();
+    const now = ctx.currentTime + delay;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = type;
+    if (startFreq != null && endFreq != null) {
+      osc.frequency.setValueAtTime(startFreq, now);
+      osc.frequency.linearRampToValueAtTime(endFreq, now + duration);
+    } else {
+      osc.frequency.setValueAtTime(freq, now);
+    }
+    g.gain.setValueAtTime(gain, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + duration);
+    osc.connect(g).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + duration + 0.02);
+  }
+
+  // Sheep step — light, bright blip
+  sheepStep() {
+    this._tone({ freq: 520, duration: 0.08, type: "sine", gain: 0.12 });
+  }
+
+  // Wolf step — lower, heavier blip so it reads as a different piece type
+  wolfStep() {
+    this._tone({ freq: 220, duration: 0.09, type: "triangle", gain: 0.14 });
+  }
+
+  // Sheep placement — light pop, slightly higher than a sheep step
+  place() {
+    this._tone({ freq: 660, duration: 0.07, type: "sine", gain: 0.1 });
+  }
+
+  // Wolf capture — descending growl
+  capture() {
+    this._tone({ startFreq: 320, endFreq: 90, duration: 0.18, type: "sawtooth", gain: 0.09 });
+  }
+
+  // Piece has no legal action (e.g. a blocked wolf) — low double-buzz "denied" cue
+  stuck() {
+    this._tone({ freq: 160, duration: 0.07, type: "square", gain: 0.1 });
+    this._tone({ freq: 130, duration: 0.09, type: "square", gain: 0.1, delay: 0.08 });
+  }
+}
+
 // ─── Board Configurations ─────────────────────────────────────────────────────
 
 // Task 1.1: grid5x5 — 25 nodes in "col,row" format, horizontal/vertical adjacency only
@@ -28,8 +93,6 @@ const _grid5x5Adjacency = (() => {
   return adj;
 })();
 
-// Task 1.2 & 1.3 & 1.4: traditional — 19 nodes with pixel positions,
-// main 3×3 8-way adjacency, neck-to-row, neck-to-diamond connections
 const BOARD_CONFIGS = {
   // Task 1.1 & 1.4
   grid5x5: {
@@ -42,57 +105,6 @@ const BOARD_CONFIGS = {
       "0,4", "1,4", "2,4", "3,4", "4,4",
     ],
     sheepReserve: 0,
-  },
-
-  // Task 1.2 & 1.3 & 1.4
-  traditional: {
-    nodes: {
-      // Main 3×3 grid (gridSize=100, centered at 400,400)
-      TL: { x: 300, y: 300 }, TC: { x: 400, y: 300 }, TR: { x: 500, y: 300 },
-      ML: { x: 300, y: 400 }, MC: { x: 400, y: 400 }, MR: { x: 500, y: 400 },
-      BL: { x: 300, y: 500 }, BC: { x: 400, y: 500 }, BR: { x: 500, y: 500 },
-      // Necks (connect main grid to diamonds)
-      neck_t: { x: 400, y: 200 },
-      neck_b: { x: 400, y: 600 },
-      // Upper diamond (above neck_t)
-      apex_t:  { x: 400, y: 100 },
-      left_t:  { x: 350, y: 150 },
-      ctr_t:   { x: 400, y: 150 },
-      right_t: { x: 450, y: 150 },
-      // Lower diamond (below neck_b)
-      apex_b:  { x: 400, y: 700 },
-      left_b:  { x: 350, y: 650 },
-      ctr_b:   { x: 400, y: 650 },
-      right_b: { x: 450, y: 650 },
-    },
-    adjacency: {
-      // Main 3×3: horizontal + vertical + diagonal (8-way), plus neck connections
-      TL: ["TC", "ML", "MC", "neck_t"],
-      TC: ["TL", "TR", "ML", "MC", "MR", "neck_t"],
-      TR: ["TC", "MC", "MR", "neck_t"],
-      ML: ["TL", "TC", "MC", "BL", "BC"],
-      MC: ["TL", "TC", "TR", "ML", "MR", "BL", "BC", "BR"],
-      MR: ["TR", "TC", "MC", "BR", "BC"],
-      BL: ["ML", "MC", "BC", "neck_b"],
-      BC: ["BL", "BR", "ML", "MC", "MR", "neck_b"],
-      BR: ["BC", "MC", "MR", "neck_b"],
-      // Necks: connect to top/bottom row and to their diamond
-      neck_t: ["TL", "TC", "TR", "left_t", "ctr_t", "right_t"],
-      neck_b: ["BL", "BC", "BR", "left_b", "ctr_b", "right_b"],
-      // Upper diamond
-      apex_t:  ["left_t", "ctr_t", "right_t"],
-      left_t:  ["apex_t", "ctr_t", "neck_t"],
-      ctr_t:   ["apex_t", "left_t", "right_t", "neck_t"],
-      right_t: ["apex_t", "ctr_t", "neck_t"],
-      // Lower diamond
-      apex_b:  ["left_b", "ctr_b", "right_b"],
-      left_b:  ["apex_b", "ctr_b", "neck_b"],
-      ctr_b:   ["apex_b", "left_b", "right_b", "neck_b"],
-      right_b: ["apex_b", "ctr_b", "neck_b"],
-    },
-    wolfStart: ["neck_t", "neck_b"],
-    sheepStart: ["TL", "TC", "TR", "ML", "MR", "BL", "BC", "BR"],
-    sheepReserve: 22,
   },
 };
 
@@ -111,7 +123,6 @@ function assertAdjacencySymmetry(config, name) {
 }
 
 assertAdjacencySymmetry(BOARD_CONFIGS.grid5x5, "grid5x5");
-assertAdjacencySymmetry(BOARD_CONFIGS.traditional, "traditional");
 
 // ─── Data types ───────────────────────────────────────────────────────────────
 
@@ -260,47 +271,165 @@ class Board {
 
 // ─── AI Player ────────────────────────────────────────────────────────────────
 
+// Three difficulty tiers, applied independently to whichever side(s) the AI
+// controls:
+//   easy   — a uniform-random legal action; no preference for captures or safety.
+//   medium — wolf: current baseline behavior (always capture if possible, else
+//            random step). sheep: random, but avoids moves/placements that let
+//            a wolf capture that sheep on its very next turn, when a safer
+//            option exists (pure self-preservation, no active planning).
+//   hard   — 1-ply lookahead: every candidate action is simulated on a cloned
+//            board and scored by a small heuristic, then the AI plays the
+//            best-scoring action (ties broken at random so it isn't fully
+//            deterministic).
 class AIPlayer {
-  // Task 3.1: wolf AI — prefers captures; falls back to random step
+  constructor(difficulty = "medium") {
+    this.difficulty = difficulty; // 'easy' | 'medium' | 'hard'
+  }
+
+  // Deep-enough clone for 1-ply simulation: copies piece state and occupancy
+  // onto a fresh Board instance without re-running the constructor (which
+  // would reset pieces to their starting positions instead of the current ones).
+  _cloneBoard(board) {
+    const clone = Object.create(Board.prototype);
+    clone.config = board.config;
+    clone.sheepReserve = board.sheepReserve;
+    clone.placingPhase = board.placingPhase;
+    clone.wolves = board.wolves.map(w => ({ type: w.type, nodeId: w.nodeId, alive: w.alive, graphics: null }));
+    clone.sheep = board.sheep.map(s => ({ type: s.type, nodeId: s.nodeId, alive: s.alive, graphics: null }));
+    clone.occupancy = {};
+    for (const nodeId of Object.keys(board.config.nodes)) {
+      const orig = board.occupancy[nodeId];
+      if (!orig) { clone.occupancy[nodeId] = null; continue; }
+      const idx = orig.type === "wolf" ? board.wolves.indexOf(orig) : board.sheep.indexOf(orig);
+      clone.occupancy[nodeId] = orig.type === "wolf" ? clone.wolves[idx] : clone.sheep[idx];
+    }
+    return clone;
+  }
+
+  // Score every candidate, return one of the top-scoring actions at random.
+  _bestByScore(candidates, scoreFn) {
+    let best = [];
+    let bestScore = -Infinity;
+    for (const action of candidates) {
+      const s = scoreFn(action);
+      if (s > bestScore) { bestScore = s; best = [action]; }
+      else if (s === bestScore) { best.push(action); }
+    }
+    return best[Math.floor(Math.random() * best.length)];
+  }
+
+  // Simulates a wolf action and scores the resulting position: captures are
+  // always worth taking; beyond that, prefer positions that keep/create more
+  // future capture threats and step options, and that leave fewer sheep alive.
+  _scoreWolfAction(board, action) {
+    const clone = this._cloneBoard(board);
+    const cloneWolf = clone.wolves[board.wolves.indexOf(action.wolf)];
+    if (action.type === "eat") clone.eat(cloneWolf, action.nodeId);
+    else clone.move(cloneWolf, action.nodeId);
+
+    let score = action.type === "eat" ? 1000 : 0;
+    for (const w of clone.wolves) {
+      score += clone.getValidEats(w).length * 30;
+      score += clone.getValidMoves(w).length * 2;
+    }
+    score -= clone.sheep.filter(s => s.alive).length * 5;
+    return score;
+  }
+
+  // Simulates a sheep action (step or placement) and scores it: reducing the
+  // total legal actions available to wolves is good (that's the trapping
+  // goal); landing somewhere a wolf could capture next turn is heavily
+  // penalized.
+  _scoreSheepAction(board, action) {
+    const clone = this._cloneBoard(board);
+    if (action.type === "place") {
+      clone.placeSheep(action.nodeId);
+    } else {
+      clone.move(clone.sheep[board.sheep.indexOf(action.sheep)], action.nodeId);
+    }
+
+    let score = 0;
+    for (const w of clone.wolves) {
+      score -= (clone.getValidMoves(w).length + clone.getValidEats(w).length) * 10;
+      for (const { remove } of clone.getValidEats(w)) {
+        if (remove === action.nodeId) score -= 500;
+      }
+    }
+    return score;
+  }
+
+  // Task 3.1: wolf AI — behavior depends on this.difficulty.
   // Returns {type:'eat'|'step', wolf, nodeId, removeId?} or null if no legal move.
   makeWolfMove(board) {
     const allCaptures = [];
     for (const wolf of board.wolves) {
       for (const { landAt, remove } of board.getValidEats(wolf)) {
-        allCaptures.push({ wolf, nodeId: landAt, removeId: remove });
+        allCaptures.push({ type: "eat", wolf, nodeId: landAt, removeId: remove });
       }
     }
-    if (allCaptures.length > 0) {
-      return { type: "eat", ...allCaptures[Math.floor(Math.random() * allCaptures.length)] };
-    }
-
     const allSteps = [];
     for (const wolf of board.wolves) {
       for (const nodeId of board.getValidMoves(wolf)) {
-        allSteps.push({ wolf, nodeId });
+        allSteps.push({ type: "step", wolf, nodeId });
       }
     }
-    if (allSteps.length === 0) return null;
-    return { type: "step", ...allSteps[Math.floor(Math.random() * allSteps.length)] };
+    const allActions = [...allCaptures, ...allSteps];
+    if (allActions.length === 0) return null;
+
+    if (this.difficulty === "easy") {
+      return allActions[Math.floor(Math.random() * allActions.length)];
+    }
+
+    if (this.difficulty === "hard") {
+      return this._bestByScore(allActions, action => this._scoreWolfAction(board, action));
+    }
+
+    // medium (default): always capture if possible, else random step.
+    if (allCaptures.length > 0) {
+      return allCaptures[Math.floor(Math.random() * allCaptures.length)];
+    }
+    return allSteps[Math.floor(Math.random() * allSteps.length)];
   }
 
-  // Task 3.2: sheep AI — random placement during placing phase, random step otherwise
+  // Task 3.2: sheep AI — behavior depends on this.difficulty.
   // Returns {type:'place'|'step', sheep, nodeId} or null if no legal move.
   makeSheepMove(board) {
     if (board.placingPhase) {
       const empty = Object.keys(board.config.nodes).filter(id => board.isEmpty(id));
       if (empty.length === 0) return null;
-      return { type: "place", sheep: null, nodeId: empty[Math.floor(Math.random() * empty.length)] };
+      const candidates = empty.map(nodeId => ({ type: "place", sheep: null, nodeId }));
+      return this._pickSheepAction(board, candidates);
     }
 
     const movable = board.sheep
       .filter(s => s.alive)
       .map(s => ({ sheep: s, moves: board.getValidSheepMoves(s) }))
       .filter(({ moves }) => moves.length > 0);
-
     if (movable.length === 0) return null;
-    const { sheep, moves } = movable[Math.floor(Math.random() * movable.length)];
-    return { type: "step", sheep, nodeId: moves[Math.floor(Math.random() * moves.length)] };
+
+    const candidates = [];
+    for (const { sheep, moves } of movable) {
+      for (const nodeId of moves) candidates.push({ type: "step", sheep, nodeId });
+    }
+    return this._pickSheepAction(board, candidates);
+  }
+
+  // Shared by placement and movement: pick among a candidate list per difficulty.
+  _pickSheepAction(board, candidates) {
+    if (this.difficulty === "easy") {
+      return candidates[Math.floor(Math.random() * candidates.length)];
+    }
+
+    if (this.difficulty === "hard") {
+      return this._bestByScore(candidates, action => this._scoreSheepAction(board, action));
+    }
+
+    // medium: random among actions that don't hand a wolf an immediate
+    // capture next turn, falling back to any action if none are safe.
+    const safe = candidates.filter(action => this._scoreSheepAction(board, action) > -500);
+    const pool = safe.length > 0 ? safe : candidates;
+    return pool[Math.floor(Math.random() * pool.length)];
   }
 }
 
@@ -309,15 +438,51 @@ class AIPlayer {
 class GameScene extends Phaser.Scene {
   // Task 4.2: initialize board and kick off rendering
   create() {
+    // Phaser Text objects render their own internal canvas texture at
+    // resolution 1 by default, which looks blurry once the browser upscales
+    // it on a HiDPI/Retina screen — and even on a standard 1x screen, a
+    // higher internal resolution supersamples the glyphs to noticeably
+    // crisper edges. This game has no top-level GameConfig resolution
+    // option, so instead every `this.add.text(...)` call in this scene is
+    // patched to default to at least 2x, or the display's real pixel
+    // density if that's higher.
+    const dpr = Math.max(2, window.devicePixelRatio || 1);
+    const originalText = this.add.text.bind(this.add);
+    // Centering a text object (setOrigin(0.5), used by every button in this
+    // game) shifts its rendered top-left corner by half its width/height —
+    // a fractional pixel whenever that's an odd number. The renderer then
+    // has to blend between pixels to draw it, which reads as blur no matter
+    // how high the texture resolution is. Snapping the origin-adjusted
+    // position back to a whole pixel (immediately, and again whenever
+    // setOrigin is called later) fixes it without touching every call site.
+    const snapToPixel = (t) => {
+      t.x = Math.round(t.x - t.displayOriginX) + t.displayOriginX;
+      t.y = Math.round(t.y - t.displayOriginY) + t.displayOriginY;
+    };
+    this.add.text = (x, y, text, style) => {
+      const t = originalText(x, y, text, { resolution: dpr, ...style });
+      const originalSetOrigin = t.setOrigin.bind(t);
+      t.setOrigin = (...args) => {
+        originalSetOrigin(...args);
+        snapToPixel(t);
+        return t;
+      };
+      snapToPixel(t);
+      return t;
+    };
+
     this.activeBoardConfig = BOARD_CONFIGS.grid5x5;
     this.activeMode = "wolf";   // 'wolf' | 'sheep' | '2p'
-    // Grid board: sheep move first; traditional board: wolves move first
-    this.activeSide = this.activeBoardConfig === BOARD_CONFIGS.grid5x5 ? "sheep" : "wolf";
+    this.difficulty = "medium"; // 'easy' | 'medium' | 'hard'
+    this.activeSide = "wolf";   // wolves always move first
     this.animating = false;
     this.selected = null;
     this.highlights = [];
     this.overlayObjects = [];
-    this.ai = new AIPlayer();
+    this.lastMoveGraphics = null;
+    this.positionHistory = new Map();
+    this.ai = new AIPlayer(this.difficulty);
+    this.sfx = new SFX();
     this.hudObjects = {};
 
     this.board = new Board(this.activeBoardConfig);
@@ -447,6 +612,8 @@ class GameScene extends Phaser.Scene {
           g.setPosition(pos.x, pos.y);
           this._drawPieceShape(g, placed);
           placed.graphics = g;
+          this.sfx.place();
+          this._drawLastMoveMarker(null, pos);
           this.clearHighlights();
           this.finishAction();
         }
@@ -463,9 +630,10 @@ class GameScene extends Phaser.Scene {
         this.executeAction(clickedNode);
         return;
       }
-      // Click on another own piece → reselect
+      // Click on another own piece → reselect (or signal it's stuck)
       if (clickedPiece && clickedPiece.type === this.activeSide) {
-        this.selectPiece(clickedPiece);
+        if (this._hasAction(clickedPiece)) this.selectPiece(clickedPiece);
+        else this.sfx.stuck();
         return;
       }
       // Anything else → deselect
@@ -476,13 +644,16 @@ class GameScene extends Phaser.Scene {
 
     // No selection yet — select a piece that has legal actions
     if (clickedPiece && clickedPiece.type === this.activeSide) {
-      const hasAction =
-        this.activeSide === "wolf"
-          ? this.board.getValidMoves(clickedPiece).length > 0 ||
-            this.board.getValidEats(clickedPiece).length > 0
-          : this.board.getValidSheepMoves(clickedPiece).length > 0;
-      if (hasAction) this.selectPiece(clickedPiece);
+      if (this._hasAction(clickedPiece)) this.selectPiece(clickedPiece);
+      else this.sfx.stuck();
     }
+  }
+
+  // Whether a piece currently has any legal action (step, or capture for wolves)
+  _hasAction(piece) {
+    return piece.type === "wolf"
+      ? this.board.getValidMoves(piece).length > 0 || this.board.getValidEats(piece).length > 0
+      : this.board.getValidSheepMoves(piece).length > 0;
   }
 
   // Task 5.3
@@ -544,6 +715,45 @@ class GameScene extends Phaser.Scene {
     this.highlights = [];
   }
 
+  // Persistent marker for the most recent action, kept visible until the next
+  // one replaces it (separate from `highlights`, which clear on deselect).
+  // An arrow from fromPos to toPos for a step/capture; a plain ring at toPos
+  // for a placement, which has no origin to point from.
+  _drawLastMoveMarker(fromPos, toPos) {
+    if (this.lastMoveGraphics) { this.lastMoveGraphics.destroy(); this.lastMoveGraphics = null; }
+    const g = this.add.graphics();
+    const color = 0xffdd33;
+
+    if (fromPos) {
+      const dx = toPos.x - fromPos.x, dy = toPos.y - fromPos.y;
+      const dist = Math.hypot(dx, dy);
+      const ux = dx / dist, uy = dy / dist;
+      const pad = 20; // keep the line clear of the piece circles at both ends
+      const sx = fromPos.x + ux * pad, sy = fromPos.y + uy * pad;
+      const ex = toPos.x - ux * pad, ey = toPos.y - uy * pad;
+
+      const headLen = 30, headAngle = Math.PI / 10;
+      const angle = Math.atan2(ey - sy, ex - sx);
+      // Stop the shaft at the arrowhead's base, not its tip — otherwise the
+      // thick line pokes through the point and blunts it.
+      const baseX = ex - headLen * Math.cos(angle), baseY = ey - headLen * Math.sin(angle);
+
+      g.lineStyle(7, color, 0.9);
+      g.lineBetween(sx, sy, baseX, baseY);
+
+      g.fillStyle(color, 0.9);
+      g.fillTriangle(
+        ex, ey,
+        ex - headLen * Math.cos(angle - headAngle), ey - headLen * Math.sin(angle - headAngle),
+        ex - headLen * Math.cos(angle + headAngle), ey - headLen * Math.sin(angle + headAngle)
+      );
+    } else {
+      g.lineStyle(5, color, 0.9);
+      g.strokeCircle(toPos.x, toPos.y, 26);
+    }
+    this.lastMoveGraphics = g;
+  }
+
   // Task 5.6: apply the action to board state, trigger animations, then finish
   executeAction(targetNodeId) {
     const piece = this.selected;
@@ -556,18 +766,24 @@ class GameScene extends Phaser.Scene {
         const oldPos = this.board.config.nodes[piece.nodeId];
         const captured = this.board.eat(piece, targetNodeId);
         const newPos = this.board.config.nodes[piece.nodeId];
+        this.sfx.capture();
+        this._drawLastMoveMarker(oldPos, newPos);
         this._animateCapture(captured);
         this._animateMove(piece, oldPos, newPos, () => this.finishAction());
       } else {
         const oldPos = this.board.config.nodes[piece.nodeId];
         this.board.move(piece, targetNodeId);
         const newPos = this.board.config.nodes[piece.nodeId];
+        this.sfx.wolfStep();
+        this._drawLastMoveMarker(oldPos, newPos);
         this._animateMove(piece, oldPos, newPos, () => this.finishAction());
       }
     } else {
       const oldPos = this.board.config.nodes[piece.nodeId];
       this.board.move(piece, targetNodeId);
       const newPos = this.board.config.nodes[piece.nodeId];
+      this.sfx.sheepStep();
+      this._drawLastMoveMarker(oldPos, newPos);
       this._animateMove(piece, oldPos, newPos, () => this.finishAction());
     }
   }
@@ -662,9 +878,33 @@ class GameScene extends Phaser.Scene {
     const winner = this.board.checkWin();
     if (winner) {
       this.showResult(winner);
-    } else {
-      this.nextTurn();
+      return;
     }
+    if (this._recordPositionAndCheckRepetition() >= 5) {
+      this.showResult("draw");
+      return;
+    }
+    this.nextTurn();
+  }
+
+  // A "position" is the full board layout + reserve count + whose turn it
+  // is next — if the exact same one recurs 5 times (e.g. two pieces
+  // shuffling back and forth), the game is a draw rather than looping forever.
+  _positionSignature() {
+    const layout = Object.keys(this.board.config.nodes)
+      .map(id => {
+        const piece = this.board.occupancy[id];
+        return piece ? piece.type[0] : "_";
+      })
+      .join("");
+    return `${this.activeSide}|${this.board.sheepReserve}|${layout}`;
+  }
+
+  _recordPositionAndCheckRepetition() {
+    const sig = this._positionSignature();
+    const count = (this.positionHistory.get(sig) || 0) + 1;
+    this.positionHistory.set(sig, count);
+    return count;
   }
 
   // Task 9.2: toggle active side; schedule AI turn if needed
@@ -701,6 +941,8 @@ class GameScene extends Phaser.Scene {
       const oldPos = this.board.config.nodes[action.wolf.nodeId];
       const captured = this.board.eat(action.wolf, action.nodeId);
       const newPos = this.board.config.nodes[action.wolf.nodeId];
+      this.sfx.capture();
+      this._drawLastMoveMarker(oldPos, newPos);
       this._animateCapture(captured);
       this._animateMove(action.wolf, oldPos, newPos, () => this.finishAction());
     } else if (action.type === "step") {
@@ -708,6 +950,9 @@ class GameScene extends Phaser.Scene {
       const oldPos = this.board.config.nodes[piece.nodeId];
       this.board.move(piece, action.nodeId);
       const newPos = this.board.config.nodes[piece.nodeId];
+      if (piece.type === "wolf") this.sfx.wolfStep();
+      else this.sfx.sheepStep();
+      this._drawLastMoveMarker(oldPos, newPos);
       this._animateMove(piece, oldPos, newPos, () => this.finishAction());
     } else if (action.type === "place") {
       const placed = this.board.placeSheep(action.nodeId);
@@ -717,6 +962,8 @@ class GameScene extends Phaser.Scene {
         g.setPosition(pos.x, pos.y);
         this._drawPieceShape(g, placed);
         placed.graphics = g;
+        this.sfx.place();
+        this._drawLastMoveMarker(null, pos);
         this.clearHighlights();
         this.finishAction();
       }
@@ -730,8 +977,10 @@ class GameScene extends Phaser.Scene {
     const bg = this.add.rectangle(400, 400, 800, 800, 0x000000, 0.75);
     this.overlayObjects.push(bg);
 
-    const resultText = winner === "wolf" ? "狼方获胜！" : "羊方获胜！";
-    const resultColor = winner === "wolf" ? "#ff6666" : "#88ccff";
+    const resultText =
+      winner === "wolf" ? "狼方获胜！" : winner === "sheep" ? "羊方获胜！" : "平局！";
+    const resultColor =
+      winner === "wolf" ? "#ff6666" : winner === "sheep" ? "#88ccff" : "#cccccc";
     const label = this.add
       .text(400, 330, resultText, {
         fontSize: "52px",
@@ -768,11 +1017,13 @@ class GameScene extends Phaser.Scene {
       if (piece.graphics) { piece.graphics.destroy(); piece.graphics = null; }
     }
     if (this.boardGraphics) { this.boardGraphics.destroy(); this.boardGraphics = null; }
+    if (this.lastMoveGraphics) { this.lastMoveGraphics.destroy(); this.lastMoveGraphics = null; }
+    this.positionHistory = new Map();
 
     this.clearHighlights();
     this.selected = null;
     this.animating = false;
-    this.activeSide = this.activeBoardConfig === BOARD_CONFIGS.grid5x5 ? "sheep" : "wolf";
+    this.activeSide = "wolf";   // wolves always move first
 
     this.board = new Board(this.activeBoardConfig);
     this.drawBoard();
@@ -806,13 +1057,13 @@ class GameScene extends Phaser.Scene {
       .text(784, 16, "", baseStyle)
       .setOrigin(1, 0);
 
-    // Reserve count — below sheep count (traditional board only)
+    // Reserve count — below sheep count (shown during a placement phase)
     this.hudObjects.reserveLabel = this.add
       .text(784, 44, "", smallStyle)
       .setOrigin(1, 0)
       .setVisible(false);
 
-    // Phase label — below reserve count (traditional board only)
+    // Phase label — below reserve count (shown during a placement phase)
     this.hudObjects.phaseLabel = this.add
       .text(784, 66, "", smallStyle)
       .setOrigin(1, 0)
@@ -831,9 +1082,8 @@ class GameScene extends Phaser.Scene {
     const aliveSheep = this.board.sheep.filter(s => s.alive).length;
     hud.sheepCountLabel.setText(`羊：${aliveSheep}`);
 
-    // Reserve/phase labels only appear on traditional board while placing
-    const isTraditional = this.activeBoardConfig === BOARD_CONFIGS.traditional;
-    const showReserve = isTraditional && this.board.placingPhase;
+    // Reserve/phase labels only appear during a placement phase
+    const showReserve = this.board.placingPhase;
     hud.reserveLabel.setVisible(showReserve);
     hud.phaseLabel.setVisible(showReserve);
     if (showReserve) {
@@ -844,29 +1094,67 @@ class GameScene extends Phaser.Scene {
 
   // Task 11.1: persistent restart + settings buttons at bottom of canvas
   _initRestartButton() {
-    const btnStyle = {
-      fontSize: "17px",
-      color: "#999999",
+    // All three bottom buttons share the same font size and padding so
+    // they're equally legible; color is the only thing that marks settings
+    // as the primary action.
+    const btnFontStyle = {
+      fontSize: "20px",
       fontFamily: '"Microsoft YaHei", sans-serif',
+      padding: { x: 22, y: 10 },
     };
-    const restartBtn = this.add
-      .text(320, 766, "重新开始", btnStyle)
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    restartBtn.on("pointerover", () => restartBtn.setStyle({ color: "#ffffff" }));
-    restartBtn.on("pointerout",  () => restartBtn.setStyle({ color: "#999999" }));
-    restartBtn.on("pointerdown", () => this.resetGame());
 
     const settingsBtn = this.add
-      .text(500, 766, "设置", btnStyle)
+      .text(400, 764, "⚙ 设置", {
+        ...btnFontStyle,
+        color: "#ffffff",
+        backgroundColor: "#3355aa",
+      })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
-    settingsBtn.on("pointerover", () => settingsBtn.setStyle({ color: "#ffffff" }));
-    settingsBtn.on("pointerout",  () => settingsBtn.setStyle({ color: "#999999" }));
+    settingsBtn.on("pointerover", () => settingsBtn.setStyle({ backgroundColor: "#4466cc" }));
+    settingsBtn.on("pointerout",  () => settingsBtn.setStyle({ backgroundColor: "#3355aa" }));
     settingsBtn.on("pointerdown", () => this._showSettingsPanel());
+
+    const restartBtn = this.add
+      .text(130, 764, "重新开始", {
+        ...btnFontStyle,
+        color: "#cccccc",
+        backgroundColor: "#2a2a3a",
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    restartBtn.on("pointerover", () => restartBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
+    restartBtn.on("pointerout",  () => restartBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
+    restartBtn.on("pointerdown", () => this.resetGame());
+
+    // Resign mirrors restart on the other side of settings.
+    const resignBtn = this.add
+      .text(670, 764, "认输", {
+        ...btnFontStyle,
+        color: "#cccccc",
+        backgroundColor: "#2a2a3a",
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    resignBtn.on("pointerover", () => resignBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
+    resignBtn.on("pointerout",  () => resignBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
+    resignBtn.on("pointerdown", () => this.resign());
   }
 
-  // Task 11.2 + 11.3: settings panel overlay — board type + game mode
+  // Concedes the game. In single-human modes the human's assigned side
+  // resigns regardless of whose turn it currently is; in two-player mode
+  // whoever currently has the turn is the one clicking, so that side resigns.
+  resign() {
+    if (this.animating || this.overlayObjects.length > 0) return;
+    const resigningSide =
+      this.activeMode === "wolf" ? "wolf" :
+      this.activeMode === "sheep" ? "sheep" :
+      this.activeSide;
+    const winner = resigningSide === "wolf" ? "sheep" : "wolf";
+    this.showResult(winner);
+  }
+
+  // Task 11.2 + 11.3: settings panel overlay — game mode
   _showSettingsPanel() {
     if (this.animating || this.overlayObjects.length > 0) return;
 
@@ -877,47 +1165,42 @@ class GameScene extends Phaser.Scene {
       .setInteractive();
     panelObjs.push(backdrop);
 
-    const card = this.add.rectangle(400, 390, 460, 310, 0x1e2840, 1);
+    const card = this.add.rectangle(400, 365, 580, 360, 0x1e2840, 1);
     card.setStrokeStyle(1, 0x4466aa, 1);
     panelObjs.push(card);
 
     panelObjs.push(
-      this.add.text(400, 260, "游戏设置", {
-        fontSize: "22px", color: "#ffffff",
+      this.add.text(400, 230, "游戏设置", {
+        fontSize: "28px", color: "#ffffff",
         fontFamily: '"Microsoft YaHei", sans-serif',
       }).setOrigin(0.5)
     );
 
-    let pendingBoard =
-      this.activeBoardConfig === BOARD_CONFIGS.grid5x5 ? "grid5x5" : "traditional";
     let pendingMode = this.activeMode;
+    let pendingDifficulty = this.difficulty;
 
-    const BOARD_OPTS = [
-      { key: "grid5x5",     label: "5×5方格" },
-      { key: "traditional", label: "传统棋盘" },
-    ];
     const MODE_OPTS = [
       { key: "wolf",  label: "玩家执狼" },
       { key: "sheep", label: "玩家执羊" },
       { key: "2p",    label: "双人对战" },
     ];
+    const DIFFICULTY_OPTS = [
+      { key: "easy",   label: "简单" },
+      { key: "medium", label: "普通" },
+      { key: "hard",   label: "困难" },
+    ];
 
-    panelObjs.push(
-      this.add.text(185, 318, "棋盘：", {
-        fontSize: "16px", color: "#aaaaaa",
-        fontFamily: '"Microsoft YaHei", sans-serif',
-      }).setOrigin(0, 0.5)
-    );
-
-    const makeBtns = (opts, xStart, xStep, y, getActive) => {
+    // Larger, well-spaced option buttons — each row is centered as a group.
+    const makeBtns = (opts, centerX, xStep, y, getActive) => {
+      const xStart = centerX - ((opts.length - 1) * xStep) / 2;
       return opts.map((opt, i) => {
         const active = getActive() === opt.key;
         const btn = this.add
           .text(xStart + i * xStep, y, opt.label, {
-            fontSize: "15px",
-            color: active ? "#ffffff" : "#777777",
+            fontSize: "20px",
+            color: active ? "#ffffff" : "#888888",
             backgroundColor: active ? "#3355aa" : "#2a2a3a",
-            padding: { x: 9, y: 5 },
+            padding: { x: 18, y: 10 },
             fontFamily: '"Microsoft YaHei", sans-serif',
           })
           .setOrigin(0.5)
@@ -930,32 +1213,39 @@ class GameScene extends Phaser.Scene {
     const refreshBtns = (btnObjs, getActive) => {
       btnObjs.forEach(({ btn, key }) => {
         btn.setStyle({
-          color: getActive() === key ? "#ffffff" : "#777777",
+          color: getActive() === key ? "#ffffff" : "#888888",
           backgroundColor: getActive() === key ? "#3355aa" : "#2a2a3a",
         });
       });
     };
 
-    const boardBtnObjs = makeBtns(BOARD_OPTS, 295, 130, 353, () => pendingBoard);
-    boardBtnObjs.forEach(({ btn, key }) =>
-      btn.on("pointerdown", () => {
-        pendingBoard = key;
-        refreshBtns(boardBtnObjs, () => pendingBoard);
-      })
-    );
-
     panelObjs.push(
-      this.add.text(185, 423, "模式：", {
-        fontSize: "16px", color: "#aaaaaa",
+      this.add.text(400, 280, "游戏模式", {
+        fontSize: "18px", color: "#aaaaaa",
         fontFamily: '"Microsoft YaHei", sans-serif',
-      }).setOrigin(0, 0.5)
+      }).setOrigin(0.5)
     );
 
-    const modeBtnObjs = makeBtns(MODE_OPTS, 253, 120, 423, () => pendingMode);
+    const modeBtnObjs = makeBtns(MODE_OPTS, 400, 170, 320, () => pendingMode);
     modeBtnObjs.forEach(({ btn, key }) =>
       btn.on("pointerdown", () => {
         pendingMode = key;
         refreshBtns(modeBtnObjs, () => pendingMode);
+      })
+    );
+
+    panelObjs.push(
+      this.add.text(400, 375, "AI 难度", {
+        fontSize: "18px", color: "#aaaaaa",
+        fontFamily: '"Microsoft YaHei", sans-serif',
+      }).setOrigin(0.5)
+    );
+
+    const difficultyBtnObjs = makeBtns(DIFFICULTY_OPTS, 400, 150, 415, () => pendingDifficulty);
+    difficultyBtnObjs.forEach(({ btn, key }) =>
+      btn.on("pointerdown", () => {
+        pendingDifficulty = key;
+        refreshBtns(difficultyBtnObjs, () => pendingDifficulty);
       })
     );
 
@@ -967,10 +1257,10 @@ class GameScene extends Phaser.Scene {
 
     // Confirm — Task 11.3: apply settings and restart
     const confirmBtn = this.add
-      .text(460, 495, "确定", {
-        fontSize: "18px", color: "#ffffff",
+      .text(480, 490, "确定", {
+        fontSize: "22px", color: "#ffffff",
         backgroundColor: "#336633",
-        padding: { x: 18, y: 8 },
+        padding: { x: 26, y: 12 },
         fontFamily: '"Microsoft YaHei", sans-serif',
       })
       .setOrigin(0.5)
@@ -978,19 +1268,19 @@ class GameScene extends Phaser.Scene {
     confirmBtn.on("pointerover", () => confirmBtn.setStyle({ backgroundColor: "#447744" }));
     confirmBtn.on("pointerout",  () => confirmBtn.setStyle({ backgroundColor: "#336633" }));
     confirmBtn.on("pointerdown", () => {
-      this.activeBoardConfig =
-        pendingBoard === "grid5x5" ? BOARD_CONFIGS.grid5x5 : BOARD_CONFIGS.traditional;
       this.activeMode = pendingMode;
+      this.difficulty = pendingDifficulty;
+      this.ai.difficulty = pendingDifficulty;
       for (const o of panelObjs) this.overlayObjects.push(o);
       this.resetGame();
     });
     panelObjs.push(confirmBtn);
 
     const cancelBtn = this.add
-      .text(340, 495, "取消", {
-        fontSize: "18px", color: "#ffffff",
+      .text(320, 490, "取消", {
+        fontSize: "22px", color: "#ffffff",
         backgroundColor: "#663333",
-        padding: { x: 18, y: 8 },
+        padding: { x: 26, y: 12 },
         fontFamily: '"Microsoft YaHei", sans-serif',
       })
       .setOrigin(0.5)
@@ -1017,6 +1307,10 @@ const config = {
   backgroundColor: 0x1a1a2e,
   parent: "game-container",
   scene: GameScene,
+  // Snap object positions to whole pixels — the WebGL renderer otherwise
+  // linear-filters textures (including text) sitting at fractional pixel
+  // coordinates, which reads as blur even at correct texture resolution.
+  render: { roundPixels: true },
 };
 
 const game = new Phaser.Game(config);
