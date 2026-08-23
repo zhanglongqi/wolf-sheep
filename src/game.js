@@ -93,6 +93,18 @@ const _grid5x5Adjacency = (() => {
   return adj;
 })();
 
+// The board's own node coordinates are authored in a fixed 0-800 local space
+// (see grid5x5 above). The canvas is wider than that to fit permanent left
+// (settings) and right (status/actions) sidebars, so every rendered position
+// and every hit-tested pointer must be shifted by this offset. Kept as a
+// module constant rather than per-node data so the board config, adjacency
+// math, and AI simulation all stay in untouched, offset-free local space.
+const BOARD_OFFSET_X = 240;
+const CANVAS_WIDTH = 1280;
+const CANVAS_HEIGHT = 800;
+const LEFT_SIDEBAR_X = BOARD_OFFSET_X / 2; // horizontal center of the left (settings) sidebar
+const RIGHT_SIDEBAR_X = BOARD_OFFSET_X + 800 + (CANVAS_WIDTH - BOARD_OFFSET_X - 800) / 2; // right (status/actions) sidebar
+
 const BOARD_CONFIGS = {
   // Task 1.1 & 1.4
   grid5x5: {
@@ -498,8 +510,8 @@ class GameScene extends Phaser.Scene {
     // Task 4.6 — set initial opacity for active side
     this.updateOpacity();
 
-    // Task 11.1 — restart button stub (implemented in task 11)
-    this._initRestartButton();
+    this._initLeftSidebar();
+    this._initRightSidebarButtons();
 
     // Schedule AI if the starting side is AI-controlled
     const isAIFirst =
@@ -508,6 +520,18 @@ class GameScene extends Phaser.Scene {
     if (isAIFirst) {
       this.time.delayedCall(400, this.executeAITurn, [], this);
     }
+  }
+
+  // Board-local node position → screen position (shifted right past the left
+  // sidebar). Used for everything actually drawn to the canvas.
+  _screenPos(pos) {
+    return { x: pos.x + BOARD_OFFSET_X, y: pos.y };
+  }
+
+  // Screen-space pointer → board-local position, for hit-testing against the
+  // unshifted coordinates in board.config.nodes.
+  _boardPoint(pointer) {
+    return { x: pointer.x - BOARD_OFFSET_X, y: pointer.y };
   }
 
   // Task 4.3: draw board edges — each adjacency pair drawn once
@@ -521,7 +545,7 @@ class GameScene extends Phaser.Scene {
         const key = [aId, bId].sort().join("|");
         if (drawn.has(key)) continue;
         drawn.add(key);
-        const a = nodes[aId], b = nodes[bId];
+        const a = this._screenPos(nodes[aId]), b = this._screenPos(nodes[bId]);
         g.lineBetween(a.x, a.y, b.x, b.y);
       }
     }
@@ -532,7 +556,7 @@ class GameScene extends Phaser.Scene {
   drawPieces() {
     for (const piece of [...this.board.wolves, ...this.board.sheep]) {
       if (!piece.alive) continue;
-      const pos = this.board.config.nodes[piece.nodeId];
+      const pos = this._screenPos(this.board.config.nodes[piece.nodeId]);
       const g = this.add.graphics();
       g.setPosition(pos.x, pos.y);
       this._drawPieceShape(g, piece);
@@ -554,7 +578,7 @@ class GameScene extends Phaser.Scene {
 
   // Task 4.5: move Graphics to current node position and redraw shape
   redrawPiece(piece) {
-    const pos = this.board.config.nodes[piece.nodeId];
+    const pos = this._screenPos(this.board.config.nodes[piece.nodeId]);
     piece.graphics.setPosition(pos.x, pos.y);
     this._drawPieceShape(piece.graphics, piece);
   }
@@ -607,13 +631,14 @@ class GameScene extends Phaser.Scene {
       if (nodeId && this.board.isEmpty(nodeId)) {
         const placed = this.board.placeSheep(nodeId);
         if (placed) {
-          const pos = this.board.config.nodes[nodeId];
+          const rawPos = this.board.config.nodes[nodeId];
+          const pos = this._screenPos(rawPos);
           const g = this.add.graphics();
           g.setPosition(pos.x, pos.y);
           this._drawPieceShape(g, placed);
           placed.graphics = g;
           this.sfx.place();
-          this._drawLastMoveMarker(null, pos);
+          this._drawLastMoveMarker(null, rawPos);
           this.clearHighlights();
           this.finishAction();
         }
@@ -670,7 +695,7 @@ class GameScene extends Phaser.Scene {
     const nodes = this.board.config.nodes;
 
     // White ring around selected piece
-    const selPos = nodes[piece.nodeId];
+    const selPos = this._screenPos(nodes[piece.nodeId]);
     const selRing = this.add.graphics();
     selRing.lineStyle(3, 0xffffff, 1.0);
     selRing.strokeCircle(selPos.x, selPos.y, piece.type === "wolf" ? 24 : 20);
@@ -679,7 +704,7 @@ class GameScene extends Phaser.Scene {
     if (piece.type === "wolf") {
       // Blue dots on valid step targets
       for (const nodeId of this.board.getValidMoves(piece)) {
-        const pos = nodes[nodeId];
+        const pos = this._screenPos(nodes[nodeId]);
         const g = this.add.graphics();
         g.fillStyle(0x4488ff, 0.5);
         g.fillCircle(pos.x, pos.y, 12);
@@ -687,20 +712,22 @@ class GameScene extends Phaser.Scene {
       }
       // Orange dots on capture landings + red rings on would-be-captured sheep
       for (const { landAt, remove } of this.board.getValidEats(piece)) {
+        const landPos = this._screenPos(nodes[landAt]);
         const og = this.add.graphics();
         og.fillStyle(0xff8800, 0.5);
-        og.fillCircle(nodes[landAt].x, nodes[landAt].y, 12);
+        og.fillCircle(landPos.x, landPos.y, 12);
         this.highlights.push(og);
 
+        const removePos = this._screenPos(nodes[remove]);
         const rg = this.add.graphics();
         rg.lineStyle(3, 0xff2222, 1.0);
-        rg.strokeCircle(nodes[remove].x, nodes[remove].y, 20);
+        rg.strokeCircle(removePos.x, removePos.y, 20);
         this.highlights.push(rg);
       }
     } else {
       // Blue dots on valid sheep step targets
       for (const nodeId of this.board.getValidSheepMoves(piece)) {
-        const pos = nodes[nodeId];
+        const pos = this._screenPos(nodes[nodeId]);
         const g = this.add.graphics();
         g.fillStyle(0x4488ff, 0.5);
         g.fillCircle(pos.x, pos.y, 12);
@@ -718,13 +745,16 @@ class GameScene extends Phaser.Scene {
   // Persistent marker for the most recent action, kept visible until the next
   // one replaces it (separate from `highlights`, which clear on deselect).
   // An arrow from fromPos to toPos for a step/capture; a plain ring at toPos
-  // for a placement, which has no origin to point from.
-  _drawLastMoveMarker(fromPos, toPos) {
+  // for a placement, which has no origin to point from. Callers pass
+  // board-local positions — the screen conversion happens here.
+  _drawLastMoveMarker(fromRawPos, toRawPos) {
     if (this.lastMoveGraphics) { this.lastMoveGraphics.destroy(); this.lastMoveGraphics = null; }
     const g = this.add.graphics();
     const color = 0xffdd33;
+    const toPos = this._screenPos(toRawPos);
 
-    if (fromPos) {
+    if (fromRawPos) {
+      const fromPos = this._screenPos(fromRawPos);
       const dx = toPos.x - fromPos.x, dy = toPos.y - fromPos.y;
       const dist = Math.hypot(dx, dy);
       const ux = dx / dist, uy = dy / dist;
@@ -792,8 +822,9 @@ class GameScene extends Phaser.Scene {
 
   _drawPlacingHints() {
     this.clearHighlights();
-    for (const [id, pos] of Object.entries(this.board.config.nodes)) {
+    for (const [id, rawPos] of Object.entries(this.board.config.nodes)) {
       if (!this.board.isEmpty(id)) continue;
+      const pos = this._screenPos(rawPos);
       const g = this.add.graphics();
       g.fillStyle(0x4488ff, 0.4);
       g.fillCircle(pos.x, pos.y, 12);
@@ -803,7 +834,8 @@ class GameScene extends Phaser.Scene {
 
   // ─── Task 7.1: smooth move tween (150 ms) ────────────────────────────────
 
-  _animateMove(piece, _oldPos, newPos, onComplete) {
+  _animateMove(piece, _oldPos, newRawPos, onComplete) {
+    const newPos = this._screenPos(newRawPos);
     this.animating = true;
     this.tweens.add({
       targets: piece.graphics,
@@ -836,6 +868,7 @@ class GameScene extends Phaser.Scene {
   // ─── Hit-test helpers ────────────────────────────────────────────────────
 
   _hitPiece(pointer) {
+    const bp = this._boardPoint(pointer);
     const all = [
       ...this.board.wolves,
       ...this.board.sheep.filter(s => s.alive),
@@ -843,17 +876,18 @@ class GameScene extends Phaser.Scene {
     for (const piece of all) {
       const pos = this.board.config.nodes[piece.nodeId];
       const r = piece.type === "wolf" ? 18 : 14;
-      const dx = pointer.x - pos.x, dy = pointer.y - pos.y;
+      const dx = bp.x - pos.x, dy = bp.y - pos.y;
       if (dx * dx + dy * dy <= r * r) return piece;
     }
     return null;
   }
 
   _hitNode(pointer) {
+    const bp = this._boardPoint(pointer);
     const HIT = 30;
     let closest = null, closestDist = HIT;
     for (const [id, pos] of Object.entries(this.board.config.nodes)) {
-      const dx = pointer.x - pos.x, dy = pointer.y - pos.y;
+      const dx = bp.x - pos.x, dy = bp.y - pos.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < closestDist) { closest = id; closestDist = dist; }
     }
@@ -957,13 +991,14 @@ class GameScene extends Phaser.Scene {
     } else if (action.type === "place") {
       const placed = this.board.placeSheep(action.nodeId);
       if (placed) {
-        const pos = this.board.config.nodes[action.nodeId];
+        const rawPos = this.board.config.nodes[action.nodeId];
+        const pos = this._screenPos(rawPos);
         const g = this.add.graphics();
         g.setPosition(pos.x, pos.y);
         this._drawPieceShape(g, placed);
         placed.graphics = g;
         this.sfx.place();
-        this._drawLastMoveMarker(null, pos);
+        this._drawLastMoveMarker(null, rawPos);
         this.clearHighlights();
         this.finishAction();
       }
@@ -974,7 +1009,7 @@ class GameScene extends Phaser.Scene {
 
   // Task 10.1 + 10.2: end-game overlay with "再来一局" button
   showResult(winner) {
-    const bg = this.add.rectangle(400, 400, 800, 800, 0x000000, 0.75);
+    const bg = this.add.rectangle(640, 400, 1280, 800, 0x000000, 0.75);
     this.overlayObjects.push(bg);
 
     const resultText =
@@ -982,7 +1017,7 @@ class GameScene extends Phaser.Scene {
     const resultColor =
       winner === "wolf" ? "#ff6666" : winner === "sheep" ? "#88ccff" : "#cccccc";
     const label = this.add
-      .text(400, 330, resultText, {
+      .text(640, 330, resultText, {
         fontSize: "52px",
         color: resultColor,
         fontFamily: '"Microsoft YaHei", "PingFang SC", sans-serif',
@@ -991,7 +1026,7 @@ class GameScene extends Phaser.Scene {
     this.overlayObjects.push(label);
 
     const playAgainBtn = this.add
-      .text(400, 440, "再来一局", {
+      .text(640, 440, "再来一局", {
         fontSize: "28px",
         color: "#ffffff",
         backgroundColor: "#335533",
@@ -1042,31 +1077,32 @@ class GameScene extends Phaser.Scene {
 
   // Task 8.1: create persistent HUD text objects
   _initHUD() {
+    const cx = RIGHT_SIDEBAR_X;
     const baseStyle = {
-      fontSize: "20px",
+      fontSize: "22px",
       color: "#ffffff",
       fontFamily: '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif',
     };
     const smallStyle = { ...baseStyle, fontSize: "16px", color: "#cccccc" };
 
-    // Turn indicator — top-left
-    this.hudObjects.turnLabel = this.add.text(16, 16, "", baseStyle);
+    // Turn indicator
+    this.hudObjects.turnLabel = this.add.text(cx, 40, "", baseStyle).setOrigin(0.5, 0);
 
-    // On-board sheep count — top-right
+    // On-board sheep count
     this.hudObjects.sheepCountLabel = this.add
-      .text(784, 16, "", baseStyle)
-      .setOrigin(1, 0);
+      .text(cx, 82, "", { ...baseStyle, fontSize: "20px" })
+      .setOrigin(0.5, 0);
 
     // Reserve count — below sheep count (shown during a placement phase)
     this.hudObjects.reserveLabel = this.add
-      .text(784, 44, "", smallStyle)
-      .setOrigin(1, 0)
+      .text(cx, 114, "", smallStyle)
+      .setOrigin(0.5, 0)
       .setVisible(false);
 
     // Phase label — below reserve count (shown during a placement phase)
     this.hudObjects.phaseLabel = this.add
-      .text(784, 66, "", smallStyle)
-      .setOrigin(1, 0)
+      .text(cx, 136, "", smallStyle)
+      .setOrigin(0.5, 0)
       .setVisible(false);
 
     this.updateHUD();
@@ -1092,55 +1128,6 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  // Task 11.1: persistent restart + settings buttons at bottom of canvas
-  _initRestartButton() {
-    // All three bottom buttons share the same font size and padding so
-    // they're equally legible; color is the only thing that marks settings
-    // as the primary action.
-    const btnFontStyle = {
-      fontSize: "20px",
-      fontFamily: '"Microsoft YaHei", sans-serif',
-      padding: { x: 22, y: 10 },
-    };
-
-    const settingsBtn = this.add
-      .text(400, 764, "⚙ 设置", {
-        ...btnFontStyle,
-        color: "#ffffff",
-        backgroundColor: "#3355aa",
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    settingsBtn.on("pointerover", () => settingsBtn.setStyle({ backgroundColor: "#4466cc" }));
-    settingsBtn.on("pointerout",  () => settingsBtn.setStyle({ backgroundColor: "#3355aa" }));
-    settingsBtn.on("pointerdown", () => this._showSettingsPanel());
-
-    const restartBtn = this.add
-      .text(130, 764, "重新开始", {
-        ...btnFontStyle,
-        color: "#cccccc",
-        backgroundColor: "#2a2a3a",
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    restartBtn.on("pointerover", () => restartBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
-    restartBtn.on("pointerout",  () => restartBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
-    restartBtn.on("pointerdown", () => this.resetGame());
-
-    // Resign mirrors restart on the other side of settings.
-    const resignBtn = this.add
-      .text(670, 764, "认输", {
-        ...btnFontStyle,
-        color: "#cccccc",
-        backgroundColor: "#2a2a3a",
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    resignBtn.on("pointerover", () => resignBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
-    resignBtn.on("pointerout",  () => resignBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
-    resignBtn.on("pointerdown", () => this.resign());
-  }
-
   // Concedes the game. In single-human modes the human's assigned side
   // resigns regardless of whose turn it currently is; in two-player mode
   // whoever currently has the turn is the one clicking, so that side resigns.
@@ -1154,30 +1141,18 @@ class GameScene extends Phaser.Scene {
     this.showResult(winner);
   }
 
-  // Task 11.2 + 11.3: settings panel overlay — game mode
-  _showSettingsPanel() {
-    if (this.animating || this.overlayObjects.length > 0) return;
+  // Landscape layout: a permanent left sidebar for game settings (mode +
+  // AI difficulty — no modal, selecting an option applies immediately and
+  // restarts) and a permanent right sidebar for status + restart/resign.
+  // Replaces the old bottom-bar buttons and popup settings panel.
 
-    const panelObjs = [];
+  _initLeftSidebar() {
+    const cx = LEFT_SIDEBAR_X;
 
-    const backdrop = this.add
-      .rectangle(400, 400, 800, 800, 0x000000, 0.55)
-      .setInteractive();
-    panelObjs.push(backdrop);
-
-    const card = this.add.rectangle(400, 365, 580, 360, 0x1e2840, 1);
-    card.setStrokeStyle(1, 0x4466aa, 1);
-    panelObjs.push(card);
-
-    panelObjs.push(
-      this.add.text(400, 230, "游戏设置", {
-        fontSize: "28px", color: "#ffffff",
-        fontFamily: '"Microsoft YaHei", sans-serif',
-      }).setOrigin(0.5)
-    );
-
-    let pendingMode = this.activeMode;
-    let pendingDifficulty = this.difficulty;
+    this.add.text(cx, 50, "游戏设置", {
+      fontSize: "26px", color: "#ffffff",
+      fontFamily: '"Microsoft YaHei", sans-serif',
+    }).setOrigin(0.5);
 
     const MODE_OPTS = [
       { key: "wolf",  label: "玩家执狼" },
@@ -1190,108 +1165,103 @@ class GameScene extends Phaser.Scene {
       { key: "hard",   label: "困难" },
     ];
 
-    // Larger, well-spaced option buttons — each row is centered as a group.
-    const makeBtns = (opts, centerX, xStep, y, getActive) => {
-      const xStart = centerX - ((opts.length - 1) * xStep) / 2;
-      return opts.map((opt, i) => {
+    // Vertically stacked option buttons, centered in the sidebar column.
+    const makeStackedBtns = (opts, y0, ySpacing, getActive, onSelect) => {
+      const btnObjs = opts.map((opt, i) => {
         const active = getActive() === opt.key;
         const btn = this.add
-          .text(xStart + i * xStep, y, opt.label, {
-            fontSize: "20px",
+          .text(cx, y0 + i * ySpacing, opt.label, {
+            fontSize: "18px",
             color: active ? "#ffffff" : "#888888",
             backgroundColor: active ? "#3355aa" : "#2a2a3a",
-            padding: { x: 18, y: 10 },
+            padding: { x: 16, y: 9 },
             fontFamily: '"Microsoft YaHei", sans-serif',
           })
           .setOrigin(0.5)
           .setInteractive({ useHandCursor: true });
-        panelObjs.push(btn);
         return { btn, key: opt.key };
       });
-    };
-
-    const refreshBtns = (btnObjs, getActive) => {
+      const refresh = () => {
+        btnObjs.forEach(({ btn, key }) => {
+          btn.setStyle({
+            color: getActive() === key ? "#ffffff" : "#888888",
+            backgroundColor: getActive() === key ? "#3355aa" : "#2a2a3a",
+          });
+        });
+      };
       btnObjs.forEach(({ btn, key }) => {
-        btn.setStyle({
-          color: getActive() === key ? "#ffffff" : "#888888",
-          backgroundColor: getActive() === key ? "#3355aa" : "#2a2a3a",
+        btn.on("pointerdown", () => {
+          if (this.animating) return;
+          onSelect(key);
+          refresh();
         });
       });
+      return { btnObjs, refresh };
     };
 
-    panelObjs.push(
-      this.add.text(400, 280, "游戏模式", {
-        fontSize: "18px", color: "#aaaaaa",
-        fontFamily: '"Microsoft YaHei", sans-serif',
-      }).setOrigin(0.5)
+    this.add.text(cx, 115, "游戏模式", {
+      fontSize: "16px", color: "#aaaaaa",
+      fontFamily: '"Microsoft YaHei", sans-serif',
+    }).setOrigin(0.5);
+
+    const modeSidebar = makeStackedBtns(
+      MODE_OPTS, 155, 52,
+      () => this.activeMode,
+      (key) => {
+        this.activeMode = key;
+        this.resetGame();
+        difficultySidebar.refresh();
+      }
     );
 
-    const modeBtnObjs = makeBtns(MODE_OPTS, 400, 170, 320, () => pendingMode);
-    modeBtnObjs.forEach(({ btn, key }) =>
-      btn.on("pointerdown", () => {
-        pendingMode = key;
-        refreshBtns(modeBtnObjs, () => pendingMode);
-      })
-    );
+    this.add.text(cx, 345, "AI 难度", {
+      fontSize: "16px", color: "#aaaaaa",
+      fontFamily: '"Microsoft YaHei", sans-serif',
+    }).setOrigin(0.5);
 
-    panelObjs.push(
-      this.add.text(400, 375, "AI 难度", {
-        fontSize: "18px", color: "#aaaaaa",
-        fontFamily: '"Microsoft YaHei", sans-serif',
-      }).setOrigin(0.5)
+    const difficultySidebar = makeStackedBtns(
+      DIFFICULTY_OPTS, 385, 52,
+      () => this.difficulty,
+      (key) => {
+        this.difficulty = key;
+        this.ai.difficulty = key;
+        this.resetGame();
+        modeSidebar.refresh();
+      }
     );
+  }
 
-    const difficultyBtnObjs = makeBtns(DIFFICULTY_OPTS, 400, 150, 415, () => pendingDifficulty);
-    difficultyBtnObjs.forEach(({ btn, key }) =>
-      btn.on("pointerdown", () => {
-        pendingDifficulty = key;
-        refreshBtns(difficultyBtnObjs, () => pendingDifficulty);
-      })
-    );
-
-    const closePanel = () => {
-      for (const o of panelObjs) o.destroy();
-      this.overlayObjects = this.overlayObjects.filter(o => !panelObjs.includes(o));
+  _initRightSidebarButtons() {
+    const cx = RIGHT_SIDEBAR_X;
+    const btnFontStyle = {
+      fontSize: "20px",
+      fontFamily: '"Microsoft YaHei", sans-serif',
+      padding: { x: 22, y: 10 },
     };
-    backdrop.on("pointerdown", closePanel);
 
-    // Confirm — Task 11.3: apply settings and restart
-    const confirmBtn = this.add
-      .text(480, 490, "确定", {
-        fontSize: "22px", color: "#ffffff",
-        backgroundColor: "#336633",
-        padding: { x: 26, y: 12 },
-        fontFamily: '"Microsoft YaHei", sans-serif',
+    const restartBtn = this.add
+      .text(cx, 680, "重新开始", {
+        ...btnFontStyle,
+        color: "#cccccc",
+        backgroundColor: "#2a2a3a",
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
-    confirmBtn.on("pointerover", () => confirmBtn.setStyle({ backgroundColor: "#447744" }));
-    confirmBtn.on("pointerout",  () => confirmBtn.setStyle({ backgroundColor: "#336633" }));
-    confirmBtn.on("pointerdown", () => {
-      this.activeMode = pendingMode;
-      this.difficulty = pendingDifficulty;
-      this.ai.difficulty = pendingDifficulty;
-      for (const o of panelObjs) this.overlayObjects.push(o);
-      this.resetGame();
-    });
-    panelObjs.push(confirmBtn);
+    restartBtn.on("pointerover", () => restartBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
+    restartBtn.on("pointerout",  () => restartBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
+    restartBtn.on("pointerdown", () => this.resetGame());
 
-    const cancelBtn = this.add
-      .text(320, 490, "取消", {
-        fontSize: "22px", color: "#ffffff",
-        backgroundColor: "#663333",
-        padding: { x: 26, y: 12 },
-        fontFamily: '"Microsoft YaHei", sans-serif',
+    const resignBtn = this.add
+      .text(cx, 740, "认输", {
+        ...btnFontStyle,
+        color: "#cccccc",
+        backgroundColor: "#2a2a3a",
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
-    cancelBtn.on("pointerover", () => cancelBtn.setStyle({ backgroundColor: "#774444" }));
-    cancelBtn.on("pointerout",  () => cancelBtn.setStyle({ backgroundColor: "#663333" }));
-    cancelBtn.on("pointerdown", closePanel);
-    panelObjs.push(cancelBtn);
-
-    // Push all panel objects onto overlayObjects to block game board input
-    this.overlayObjects.push(...panelObjs);
+    resignBtn.on("pointerover", () => resignBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
+    resignBtn.on("pointerout",  () => resignBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
+    resignBtn.on("pointerdown", () => this.resign());
   }
 
   update() {}
@@ -1299,11 +1269,11 @@ class GameScene extends Phaser.Scene {
 
 // ─── Phaser Game Config ───────────────────────────────────────────────────────
 
-// Task 4.1: 800×800, dark background, game-container parent
+// Task 4.1: landscape canvas (board + left/right sidebars), dark background
 const config = {
   type: Phaser.AUTO,
-  width: 800,
-  height: 800,
+  width: CANVAS_WIDTH,
+  height: CANVAS_HEIGHT,
   backgroundColor: 0x1a1a2e,
   parent: "game-container",
   scene: GameScene,
