@@ -136,6 +136,171 @@ function assertAdjacencySymmetry(config, name) {
 
 assertAdjacencySymmetry(BOARD_CONFIGS.grid5x5, "grid5x5");
 
+// ─── Cartoon piece artwork ────────────────────────────────────────────────────
+
+// Pieces are drawn from primitives straight onto each piece's own Graphics
+// object, centred on (0,0) and already at final pixel size — so the existing
+// move tweens (which animate the Graphics position) and the dim-when-stuck
+// alpha handling keep working untouched, with no image assets to load.
+//
+// PIECE_RADIUS is the shared footprint used for click hit-testing and for the
+// selection / capture-target rings, so art and interaction stay in sync.
+const PIECE_RADIUS = { wolf: 27, sheep: 26 };
+
+// Phaser's fillEllipse can't be rotated, so ovals are emitted as polygons —
+// used for heads, muzzles and the sheep's drooping ears.
+function fillOval(g, cx, cy, rx, ry, angle = 0, steps = 24) {
+  const pts = [];
+  const cos = Math.cos(angle), sin = Math.sin(angle);
+  for (let i = 0; i < steps; i++) {
+    const t = (i / steps) * Math.PI * 2;
+    const x = Math.cos(t) * rx, y = Math.sin(t) * ry;
+    pts.push({ x: cx + x * cos - y * sin, y: cy + x * sin + y * cos });
+  }
+  g.fillPoints(pts, true);
+}
+
+// Fluffy grey ruff, big pointed ears, amber slanted eyes, long snout and a
+// pair of fangs — cartoon proportions (oversized head, oversized eyes) with a
+// silhouette deliberately spiky, so it never reads as a cat.
+function drawWolfArt(g) {
+  const COAT = 0x8b95ad, COAT_DARK = 0x5c6580, BLAZE = 0xa3adc4;
+  const MUZZLE = 0xeceff8, INNER_EAR = 0xd08f97, EYE = 0xffcf3d, INK = 0x20222e;
+
+  // Ground shadow — gives the token a little lift off the board lines
+  g.fillStyle(0x000000, 0.28);
+  fillOval(g, 0, 22, 18, 5);
+
+  // Spiky neck ruff behind the head: a star polygon of alternating radii, so
+  // the outline is shaggy fur rather than a smooth disc.
+  const ruff = [];
+  const spikes = 11;
+  for (let i = 0; i < spikes * 2; i++) {
+    const a = (i / (spikes * 2)) * Math.PI * 2 - Math.PI / 2;
+    const r = i % 2 === 0 ? 25 : 18;
+    ruff.push({ x: Math.cos(a) * r, y: Math.sin(a) * r * 0.94 + 1 });
+  }
+  g.fillStyle(COAT_DARK, 1);
+  g.fillPoints(ruff, true);
+
+  // Ears — tall, splayed outward
+  g.fillStyle(COAT_DARK, 1);
+  g.fillTriangle(-19, -6, -24.5, -28, -4, -17);
+  g.fillTriangle(19, -6, 24.5, -28, 4, -17);
+  g.fillStyle(INNER_EAR, 1);
+  g.fillTriangle(-16.5, -9, -20, -23, -7.5, -16);
+  g.fillTriangle(16.5, -9, 20, -23, 7.5, -16);
+
+  // Head + lighter forehead blaze — wider than tall, so the skull reads canine
+  g.fillStyle(COAT, 1);
+  fillOval(g, 0, -1, 18.5, 14.8);
+  g.fillStyle(BLAZE, 1);
+  fillOval(g, 0, -8, 7.5, 8);
+
+  // Fur tuft between the ears
+  g.fillStyle(COAT_DARK, 1);
+  g.fillTriangle(-6, -12, -1, -14, -3.5, -22);
+  g.fillTriangle(6, -12, 1, -14, 3.5, -22);
+
+  // Snout: a bridge running up between the eyes plus a rounded muzzle, which
+  // is what separates a canine profile from a feline one.
+  g.fillStyle(MUZZLE, 1);
+  fillOval(g, 0, 1, 6.5, 9);
+  fillOval(g, 0, 9.5, 12.5, 8.5);
+
+  // Nose
+  g.fillStyle(INK, 1);
+  fillOval(g, 0, 3.2, 4.2, 3.0);
+  g.fillTriangle(-3.2, 3.5, 3.2, 3.5, 0, 6.8);
+
+  // Open grin: a dark mouth with two fangs hanging into it and a bit of
+  // tongue — fangs need the dark backing to be visible on the pale muzzle.
+  g.fillStyle(INK, 1);
+  fillOval(g, 0, 14, 7.2, 4.6);
+  g.fillStyle(0xe0666f, 1);
+  fillOval(g, 0, 16.4, 3.4, 2.1);
+  g.fillStyle(0xffffff, 1);
+  g.fillTriangle(-4.7, 10.6, -1.7, 10.6, -3.2, 15.2);
+  g.fillTriangle(4.7, 10.6, 1.7, 10.6, 3.2, 15.2);
+
+  // Eyes — slanted outward for a predatory squint
+  g.fillStyle(EYE, 1);
+  fillOval(g, -8, -3.5, 5.4, 4.4, 0.22);
+  fillOval(g, 8, -3.5, 5.4, 4.4, -0.22);
+  g.fillStyle(INK, 1);
+  fillOval(g, -7.4, -2.8, 2.3, 3.1);
+  fillOval(g, 7.4, -2.8, 2.3, 3.1);
+  g.fillStyle(0xffffff, 0.9);
+  g.fillCircle(-9.2, -5.0, 1.2);
+  g.fillCircle(6.4, -5.0, 1.2);
+
+  // Angled brows
+  g.lineStyle(3, COAT_DARK, 1);
+  g.lineBetween(-13.5, -11, -4, -7.5);
+  g.lineBetween(13.5, -11, 4, -7.5);
+}
+
+// A scalloped wool cloud (the opposite silhouette to the wolf's spikes) around
+// a cream face with big eyes, blushed cheeks and droopy ears.
+function drawSheepArt(g) {
+  const WOOL = 0xfbfaf3, WOOL_SHADE = 0xd3d3c6;
+  const FACE = 0xf7ddc6, FACE_EDGE = 0xd6ab8c, SNOUT = 0xecc1a6;
+  const EAR = 0xe9c6ac, BLUSH = 0xf0928f, INK = 0x2b2118;
+
+  g.fillStyle(0x000000, 0.28);
+  fillOval(g, 0, 22, 17, 5);
+
+  // Wool: a ring of puffs (shaded copies first, lighter ones offset up over
+  // them) plus a central mass — reads as fluff without needing gradients.
+  const puffs = [];
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2 - Math.PI / 2;
+    puffs.push({ x: Math.cos(a) * 15, y: Math.sin(a) * 14 - 1, r: 9 });
+  }
+  g.fillStyle(WOOL_SHADE, 1);
+  for (const { x, y, r } of puffs) g.fillCircle(x, y + 2.5, r);
+  g.fillStyle(WOOL, 1);
+  for (const { x, y, r } of puffs) g.fillCircle(x, y, r);
+  fillOval(g, 0, -2, 15, 13.5);
+
+  // Droopy ears, tucked behind the face
+  g.fillStyle(EAR, 1);
+  fillOval(g, -16, 1, 8, 4.3, -0.38);
+  fillOval(g, 16, 1, 8, 4.3, 0.38);
+
+  // Face, outlined so the cream reads against the white wool, with a wool
+  // fringe overlapping its top edge
+  g.fillStyle(FACE_EDGE, 1);
+  fillOval(g, 0, 6, 12, 11);
+  g.fillStyle(FACE, 1);
+  fillOval(g, 0, 6, 11, 10);
+  g.fillStyle(WOOL, 1);
+  fillOval(g, 0, -4, 11.5, 8);
+
+  // Blushed cheeks
+  g.fillStyle(BLUSH, 0.35);
+  g.fillCircle(-8, 8.5, 3.2);
+  g.fillCircle(8, 8.5, 3.2);
+
+  // Eyes
+  g.fillStyle(INK, 1);
+  fillOval(g, -5, 4.5, 2.9, 3.4);
+  fillOval(g, 5, 4.5, 2.9, 3.4);
+  g.fillStyle(0xffffff, 0.95);
+  g.fillCircle(-5.9, 3.3, 1.2);
+  g.fillCircle(4.1, 3.3, 1.2);
+
+  // Snout, nostrils, smile
+  g.fillStyle(SNOUT, 1);
+  fillOval(g, 0, 11.5, 5.6, 3.8);
+  g.fillStyle(INK, 1);
+  g.fillCircle(-1.9, 10.6, 0.85);
+  g.fillCircle(1.9, 10.6, 0.85);
+  g.lineStyle(1.4, INK, 1);
+  g.lineBetween(-2.8, 13.2, 0, 14.3);
+  g.lineBetween(0, 14.3, 2.8, 13.2);
+}
+
 // ─── Data types ───────────────────────────────────────────────────────────────
 
 // Piece: represents a single wolf or sheep on the board
@@ -564,16 +729,11 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  // Shared: clear and fill the circle for a piece on its Graphics object
+  // Shared: clear and redraw a piece's cartoon artwork on its Graphics object
   _drawPieceShape(g, piece) {
     g.clear();
-    if (piece.type === "wolf") {
-      g.fillStyle(0xff4444, 1);
-      g.fillCircle(0, 0, 18);
-    } else {
-      g.fillStyle(0xffffff, 1);
-      g.fillCircle(0, 0, 14);
-    }
+    if (piece.type === "wolf") drawWolfArt(g);
+    else drawSheepArt(g);
   }
 
   // Task 4.5: move Graphics to current node position and redraw shape
@@ -694,11 +854,15 @@ class GameScene extends Phaser.Scene {
     if (!piece) return;
     const nodes = this.board.config.nodes;
 
-    // White ring around selected piece
+    // White ring around selected piece, over a dark under-stroke so it stays
+    // readable against the sheep's white wool as well as the dark board
     const selPos = this._screenPos(nodes[piece.nodeId]);
     const selRing = this.add.graphics();
+    const selRadius = PIECE_RADIUS[piece.type] + 9;
+    selRing.lineStyle(7, 0x14141f, 0.85);
+    selRing.strokeCircle(selPos.x, selPos.y, selRadius);
     selRing.lineStyle(3, 0xffffff, 1.0);
-    selRing.strokeCircle(selPos.x, selPos.y, piece.type === "wolf" ? 24 : 20);
+    selRing.strokeCircle(selPos.x, selPos.y, selRadius);
     this.highlights.push(selRing);
 
     if (piece.type === "wolf") {
@@ -720,8 +884,10 @@ class GameScene extends Phaser.Scene {
 
         const removePos = this._screenPos(nodes[remove]);
         const rg = this.add.graphics();
+        rg.lineStyle(7, 0x14141f, 0.85);
+        rg.strokeCircle(removePos.x, removePos.y, PIECE_RADIUS.sheep + 9);
         rg.lineStyle(3, 0xff2222, 1.0);
-        rg.strokeCircle(removePos.x, removePos.y, 20);
+        rg.strokeCircle(removePos.x, removePos.y, PIECE_RADIUS.sheep + 9);
         this.highlights.push(rg);
       }
     } else {
@@ -758,7 +924,7 @@ class GameScene extends Phaser.Scene {
       const dx = toPos.x - fromPos.x, dy = toPos.y - fromPos.y;
       const dist = Math.hypot(dx, dy);
       const ux = dx / dist, uy = dy / dist;
-      const pad = 20; // keep the line clear of the piece circles at both ends
+      const pad = 32; // keep the line clear of the piece artwork at both ends
       const sx = fromPos.x + ux * pad, sy = fromPos.y + uy * pad;
       const ex = toPos.x - ux * pad, ey = toPos.y - uy * pad;
 
@@ -779,7 +945,7 @@ class GameScene extends Phaser.Scene {
       );
     } else {
       g.lineStyle(5, color, 0.9);
-      g.strokeCircle(toPos.x, toPos.y, 26);
+      g.strokeCircle(toPos.x, toPos.y, PIECE_RADIUS.sheep + 9);
     }
     this.lastMoveGraphics = g;
   }
@@ -850,19 +1016,65 @@ class GameScene extends Phaser.Scene {
     });
   }
 
-  // ─── Task 7.2: captured sheep fade-out tween (200 ms) ────────────────────
+  // ─── Task 7.2: captured sheep exit animation ─────────────────────────────
 
+  // A brief startled squash, then a spinning shrink-and-fade "knocked away"
+  // exit, plus a small burst of wool puffs — reads as an actual event rather
+  // than a plain fade.
   _animateCapture(piece) {
     if (!piece.graphics) return;
+    const g = piece.graphics;
+    this._spawnCapturePoof(g.x, g.y);
+
     this.tweens.add({
-      targets: piece.graphics,
-      alpha: 0,
-      duration: 200,
-      ease: "Linear",
+      targets: g,
+      scaleX: 1.2,
+      scaleY: 0.8,
+      duration: 70,
+      ease: "Quad.easeOut",
+      yoyo: true,
       onComplete: () => {
-        if (piece.graphics) { piece.graphics.destroy(); piece.graphics = null; }
+        this.tweens.add({
+          targets: g,
+          scaleX: 0,
+          scaleY: 0,
+          angle: (Math.random() < 0.5 ? -1 : 1) * (200 + Math.random() * 80),
+          alpha: 0,
+          duration: 260,
+          ease: "Back.easeIn",
+          onComplete: () => {
+            if (piece.graphics) { piece.graphics.destroy(); piece.graphics = null; }
+          },
+        });
       },
     });
+  }
+
+  // Small burst of wool-colored puffs radiating outward from a capture point,
+  // each fading and growing as it flies out. Self-destroys on completion, so
+  // it needs no external cleanup bookkeeping.
+  _spawnCapturePoof(x, y) {
+    const count = 6;
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + Math.random() * 0.4;
+      const dist = 14 + Math.random() * 6;
+      const g = this.add.graphics();
+      g.setPosition(x, y);
+      g.fillStyle(0xf3f1e8, 0.85);
+      g.fillCircle(0, 0, 5 + Math.random() * 2);
+      g.setScale(0.4);
+
+      this.tweens.add({
+        targets: g,
+        x: x + Math.cos(angle) * dist,
+        y: y + Math.sin(angle) * dist,
+        scale: 1.3,
+        alpha: 0,
+        duration: 340,
+        ease: "Quad.easeOut",
+        onComplete: () => g.destroy(),
+      });
+    }
   }
 
   // ─── Hit-test helpers ────────────────────────────────────────────────────
@@ -875,7 +1087,7 @@ class GameScene extends Phaser.Scene {
     ];
     for (const piece of all) {
       const pos = this.board.config.nodes[piece.nodeId];
-      const r = piece.type === "wolf" ? 18 : 14;
+      const r = PIECE_RADIUS[piece.type];
       const dx = bp.x - pos.x, dy = bp.y - pos.y;
       if (dx * dx + dy * dy <= r * r) return piece;
     }
@@ -1231,16 +1443,30 @@ class GameScene extends Phaser.Scene {
     );
   }
 
+  // Bare glyph-run width for a string in the given font, with no padding or
+  // letter spacing — used to work out how much extra letter spacing "认输"
+  // needs to span the same width as "重新开始" (see _initRightSidebarButtons).
+  _measureTextWidth(text, fontStyle) {
+    const t = this.add.text(0, 0, text, fontStyle);
+    const w = t.width;
+    t.destroy();
+    return w;
+  }
+
   _initRightSidebarButtons() {
     const cx = RIGHT_SIDEBAR_X;
-    const btnFontStyle = {
-      fontSize: "20px",
-      fontFamily: '"Microsoft YaHei", sans-serif',
-      padding: { x: 22, y: 10 },
-    };
+    const fontStyle = { fontSize: "20px", fontFamily: '"Microsoft YaHei", sans-serif' };
+    const btnFontStyle = { ...fontStyle, padding: { x: 22, y: 10 }, align: "center" };
+
+    // "认输" is only two characters where "重新开始" is four; stretching its
+    // one gap so the glyph run spans the same width as "重新开始" (rather than
+    // a small fixed gap) makes the two labels line up as a matched pair.
+    const restartTextWidth = this._measureTextWidth("重新开始", fontStyle);
+    const resignTextWidth = this._measureTextWidth("认输", fontStyle);
+    const resignLetterSpacing = restartTextWidth - resignTextWidth;
 
     const restartBtn = this.add
-      .text(cx, 680, "重新开始", {
+      .text(cx, 620, "重新开始", {
         ...btnFontStyle,
         color: "#cccccc",
         backgroundColor: "#2a2a3a",
@@ -1252,8 +1478,9 @@ class GameScene extends Phaser.Scene {
     restartBtn.on("pointerdown", () => this.resetGame());
 
     const resignBtn = this.add
-      .text(cx, 740, "认输", {
+      .text(cx, 680, "认输", {
         ...btnFontStyle,
+        letterSpacing: resignLetterSpacing,
         color: "#cccccc",
         backgroundColor: "#2a2a3a",
       })
@@ -1262,6 +1489,13 @@ class GameScene extends Phaser.Scene {
     resignBtn.on("pointerover", () => resignBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
     resignBtn.on("pointerout",  () => resignBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
     resignBtn.on("pointerdown", () => this.resign());
+
+    // Both labels now occupy matching glyph-run widths, but pin both to the
+    // same pill footprint too so rounding differences can't show through.
+    const w = Math.max(restartBtn.width, resignBtn.width);
+    const h = Math.max(restartBtn.height, resignBtn.height);
+    restartBtn.setFixedSize(w, h);
+    resignBtn.setFixedSize(w, h);
   }
 
   update() {}
