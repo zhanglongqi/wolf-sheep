@@ -48,29 +48,8 @@ A direction is sealed for a wolf when a neighboring node B contains a sheep AND 
 - **WHEN** all neighbors of a sheep are occupied
 - **THEN** `getValidSheepMoves` SHALL return an empty array
 
-### Requirement: Sheep placement phase for traditional board
-When `Board.placingPhase` is `true` (traditional board, `sheepReserve > 0`), the sheep's turn action SHALL be to call `Board.placeSheep(nodeId)`. This places a new sheep at the given node, decrements `sheepReserve`, and switches `placingPhase` to `false` when `sheepReserve` reaches 0.
-
-#### Scenario: Valid placement
-- **WHEN** `placeSheep` is called with an empty nodeId and `sheepReserve > 0`
-- **THEN** a new sheep piece SHALL appear at that node
-- **AND** `sheepReserve` SHALL decrement by 1
-
-#### Scenario: Placement exhausts reserve
-- **WHEN** `placeSheep` is called and `sheepReserve` drops to 0
-- **THEN** `placingPhase` SHALL become false
-- **AND** subsequent sheep turns SHALL use move actions instead
-
-#### Scenario: Placement rejected on occupied node
-- **WHEN** `placeSheep` is called with a node that is already occupied
-- **THEN** the placement SHALL be rejected (no state change)
-
-#### Scenario: Grid board has no placement phase
-- **WHEN** the grid5x5 board is initialized
-- **THEN** `placingPhase` SHALL be false and SHALL remain false for the entire game
-
 ### Requirement: Win condition — wolf wins when all sheep are gone
-`Board.checkWin()` SHALL return `'wolf'` when the count of alive sheep pieces on the board (not counting reserve) equals zero.
+`Board.checkWin()` SHALL return `'wolf'` when there are no alive sheep pieces on the board AND `sheepReserve` is 0.
 
 #### Scenario: All sheep eaten
 - **WHEN** the last sheep piece is captured
@@ -94,3 +73,27 @@ When `Board.placingPhase` is `true` (traditional board, `sheepReserve > 0`), the
 #### Scenario: No winner yet
 - **WHEN** neither win condition is satisfied
 - **THEN** `checkWin()` SHALL return null
+
+### Requirement: Draw when a position repeats five times
+`GameScene` SHALL track a signature of each position reached — the full board occupancy layout, `sheepReserve`, and which side is next to move — after every completed action. When the same signature has occurred 5 times, the game SHALL end in a draw instead of continuing, even though `Board.checkWin()` reports no winner.
+
+#### Scenario: Position recurs a fifth time
+- **WHEN** the exact same board layout, reserve count, and side-to-move combination has now occurred for the 5th time
+- **THEN** the game SHALL end with a draw result
+
+#### Scenario: Position has not repeated enough
+- **WHEN** a position signature has occurred fewer than 5 times
+- **THEN** the game SHALL continue to the next turn normally
+
+### Requirement: A side can resign to end the game immediately
+Triggering `GameScene.resign()` SHALL immediately end the game with the opposing side declared the winner. In a single-human game mode (`activeMode` is `'wolf'` or `'sheep'`), resigning always concedes the human-controlled side regardless of whose turn it currently is. In two-player mode (`activeMode` is `'2p'`), resigning concedes whichever side currently has the turn (`activeSide`).
+
+#### Scenario: Resign in a single-human mode
+- **WHEN** `activeMode` is `'wolf'` (or `'sheep'`) and the player triggers resign
+- **THEN** wolf (or sheep) SHALL lose regardless of `activeSide`
+- **AND** the opposing side SHALL be declared the winner
+
+#### Scenario: Resign in two-player mode
+- **WHEN** `activeMode` is `'2p'` and the side currently to move triggers resign
+- **THEN** that side SHALL lose
+- **AND** the other side SHALL be declared the winner
