@@ -1,0 +1,45 @@
+# Backlog
+
+Ideas surfaced during `/opsx:explore` sessions, parked until picked up. Not
+OpenSpec changes yet — promote an item to `openspec/changes/<name>/` when
+someone's ready to scope it.
+
+## 传统棋盘（19 节点 / 对角线拓扑）
+
+`BOARD_CONFIGS.traditional` existed once (commit `92088af`) and was removed in
+`b9427a9` because the diagonal adjacency was wrong and not worth patching.
+[REQUIREMENTS.md](../REQUIREMENTS.md) §02/§07 still has the full corrected
+node layout + adjacency spec (TL↔MC, TC↔ML, TC↔MR, …) — this is a redo, not a
+from-scratch design. `Board.placeSheep()` and the placement-phase flag already
+exist in the engine and just need a config with `sheepReserve > 0` to exercise
+them.
+
+## 规则逻辑单测
+
+`Board` and `AIPlayer` are pure logic classes with no Phaser dependency —
+jump-capture legality, the block-off rule, win/draw detection are all testable
+without a canvas. Zero test coverage today. Lowest-risk item on this list;
+mainly guards against regressions when the AI or rules change later.
+
+## 步数 / 最快获胜统计
+
+Deferred out of the 战绩持久化 change (`mode+difficulty` win/loss/draw counts,
+plus a stats panel and end-game-overlay shortcut) — that one only tracks
+win/loss/draw. This would add a per-game move counter and a "fastest win"
+record on top of it. Needs new instrumentation `game.js` doesn't have yet: a
+move counter wired into `executeAction`/`executeAITurn`, and a start
+timestamp set in `create()`/`resetGame()`. Open question carried over from
+that exploration: rank "fastest" by move count (clean, immune to the player
+tabbing away) or wall-clock time (more intuitive, noisier)?
+
+## 工程健康度
+
+`src/game.js` is 1521 lines in one file — `design.md`'s original call ("too
+small to bother splitting") was made when the file was a fraction of this
+size and is worth revisiting.
+
+## 视听打磨
+
+Mute/volume toggle for the synthesized SFX (currently no way to silence it).
+End-game overlay could borrow the squash/spin/poof technique from the
+capture-death animation for a bit more ceremony on a win/loss.

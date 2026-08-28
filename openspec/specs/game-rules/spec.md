@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Defines the core rules engine behavior: legal moves and captures, the blocking rule, and how a game ends (win, draw, resignation).
+
+## Requirements
 
 ### Requirement: Wolf valid moves computed correctly
 `Board.getValidMoves(wolf)` SHALL return a list of node IDs that the wolf can step to: all neighbors of the wolf's current node that are empty.
@@ -27,7 +31,7 @@
 - **THEN** `getValidEats` SHALL return an empty array
 
 ### Requirement: Blocking rule prevents wolf action in sealed directions
-A direction is sealed for a wolf when a neighboring node B contains a sheep AND the node C directly beyond B (collinear, neighbor of B, not A) is either out of bounds (not adjacent to B in that direction) or occupied by another piece. In a sealed direction, the wolf CANNOT step to B and CANNOT capture through B.
+A direction is sealed for a wolf when a neighboring node B contains a sheep AND the node C directly beyond B (collinear, neighbor of B, not A) is either out of bounds (not adjacent to B in that direction) or occupied by another piece. In a sealed direction, the wolf SHALL NOT step to B and SHALL NOT capture through B.
 
 #### Scenario: Blocked direction excluded from valid moves
 - **WHEN** neighbor B has a sheep and no empty node exists collinearly beyond B
