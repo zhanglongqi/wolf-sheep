@@ -79,7 +79,6 @@ npm run preview  # 本地预览构建结果
 ```
 src/
   game.js       # 棋盘配置、规则引擎、AI、Phaser 场景
-  style.css     # 页面样式
 index.html      # 入口页面
 ```
 
@@ -158,6 +157,5 @@ npm run preview  # preview the production build locally
 ```
 src/
   game.js       # board config, rules engine, AI, Phaser scene
-  style.css     # page styles
 index.html      # entry page
 ```

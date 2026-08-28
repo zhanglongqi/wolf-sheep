@@ -15,6 +15,16 @@
       height: 100vh;
     }
 
+    /* Portrait: the canvas is taller than one viewport by design (top status
+       band + board + bottom settings band) — let the page scroll natively to
+       reveal the rest instead of clipping it inside a fixed 100vh box. The
+       `portrait` class is set once at load by src/game.js. */
+    body.portrait #game-container {
+      height: auto;
+      min-height: 100vh;
+      align-items: flex-start;
+    }
+
     body {
       background-color: black;
     }

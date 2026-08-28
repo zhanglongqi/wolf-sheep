@@ -105,6 +105,28 @@ const CANVAS_HEIGHT = 800;
 const LEFT_SIDEBAR_X = BOARD_OFFSET_X / 2; // horizontal center of the left (settings) sidebar
 const RIGHT_SIDEBAR_X = BOARD_OFFSET_X + 800 + (CANVAS_WIDTH - BOARD_OFFSET_X - 800) / 2; // right (status/actions) sidebar
 
+// Orientation is determined once, here at module load — before `Phaser.Game`
+// is constructed below — and reused for the rest of the session (layout does
+// not react to resize/rotation; see design.md Decision 1 & 5).
+const isPortrait = window.innerWidth < window.innerHeight;
+document.body.classList.toggle("portrait", isPortrait);
+
+// Portrait canvas: the board's own [100,700] local space (600 square, 100px
+// margin either side = 800 wide) needs no horizontal offset in portrait,
+// since nothing sits beside it anymore — top/bottom bands stack above and
+// below instead. Band heights are approximate starting points, tuned once
+// the layout is actually visible (see design.md Decision 2).
+const PORTRAIT_CANVAS_WIDTH = 800;
+const PORTRAIT_TOP_HEIGHT = 160;
+const PORTRAIT_BOTTOM_HEIGHT = 200;
+const PORTRAIT_CANVAS_HEIGHT = PORTRAIT_TOP_HEIGHT + 800 + PORTRAIT_BOTTOM_HEIGHT;
+
+// Extra tap-tolerance margin (logical units) applied only in portrait, where
+// the smaller on-screen scale makes pieces harder to hit precisely; kept
+// well under half the node spacing (150) so adjacent targets never overlap.
+// See design.md Decision 4.
+const PORTRAIT_HIT_MARGIN = 10;
+
 const BOARD_CONFIGS = {
   // Task 1.1 & 1.4
   grid5x5: {
@@ -648,6 +670,10 @@ class GameScene extends Phaser.Scene {
       return t;
     };
 
+    // Determined once at module load (before this Phaser.Game was even
+    // constructed) — see the `isPortrait` module constant.
+    this.isPortrait = isPortrait;
+
     this.activeBoardConfig = BOARD_CONFIGS.grid5x5;
     this.activeMode = "wolf";   // 'wolf' | 'sheep' | '2p'
     this.difficulty = "medium"; // 'easy' | 'medium' | 'hard'
@@ -670,13 +696,21 @@ class GameScene extends Phaser.Scene {
     this.input.on("pointerdown", this.onPointerDown, this);
 
     // Task 8.1 — HUD init stub (implemented in task 8)
-    this._initHUD();
+    if (this.isPortrait) {
+      this._initPortraitTopBand();
+    } else {
+      this._initHUD();
+    }
 
     // Task 4.6 — set initial opacity for active side
     this.updateOpacity();
 
-    this._initLeftSidebar();
-    this._initRightSidebarButtons();
+    if (this.isPortrait) {
+      this._initPortraitBottomBand();
+    } else {
+      this._initLeftSidebar();
+      this._initRightSidebarButtons();
+    }
 
     // Schedule AI if the starting side is AI-controlled
     const isAIFirst =
@@ -687,16 +721,22 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  // Board-local node position → screen position (shifted right past the left
-  // sidebar). Used for everything actually drawn to the canvas.
+  // Board-local node position → screen position. In landscape, shifted right
+  // past the left sidebar. In portrait, the board's own [100,700] local span
+  // is already centered in the 800-wide portrait canvas, so only a vertical
+  // shift past the top band is needed. See design.md Decision 2.
   _screenPos(pos) {
-    return { x: pos.x + BOARD_OFFSET_X, y: pos.y };
+    return this.isPortrait
+      ? { x: pos.x, y: pos.y + PORTRAIT_TOP_HEIGHT }
+      : { x: pos.x + BOARD_OFFSET_X, y: pos.y };
   }
 
   // Screen-space pointer → board-local position, for hit-testing against the
   // unshifted coordinates in board.config.nodes.
   _boardPoint(pointer) {
-    return { x: pointer.x - BOARD_OFFSET_X, y: pointer.y };
+    return this.isPortrait
+      ? { x: pointer.x, y: pointer.y - PORTRAIT_TOP_HEIGHT }
+      : { x: pointer.x - BOARD_OFFSET_X, y: pointer.y };
   }
 
   // Task 4.3: draw board edges — each adjacency pair drawn once
@@ -1085,9 +1125,13 @@ class GameScene extends Phaser.Scene {
       ...this.board.wolves,
       ...this.board.sheep.filter(s => s.alive),
     ];
+    // Portrait pieces render much smaller on screen after scaling to fit a
+    // narrow viewport (see design.md Decision 4) — the margin is added to
+    // hit-testing only, so tap tolerance grows without the art itself doing so.
+    const margin = this.isPortrait ? PORTRAIT_HIT_MARGIN : 0;
     for (const piece of all) {
       const pos = this.board.config.nodes[piece.nodeId];
-      const r = PIECE_RADIUS[piece.type];
+      const r = PIECE_RADIUS[piece.type] + margin;
       const dx = bp.x - pos.x, dy = bp.y - pos.y;
       if (dx * dx + dy * dy <= r * r) return piece;
     }
@@ -1096,7 +1140,9 @@ class GameScene extends Phaser.Scene {
 
   _hitNode(pointer) {
     const bp = this._boardPoint(pointer);
-    const HIT = 30;
+    // 40 in portrait (30 + PORTRAIT_HIT_MARGIN) stays well under half the
+    // node spacing (150/2 = 75), so adjacent nodes never become ambiguous.
+    const HIT = 30 + (this.isPortrait ? PORTRAIT_HIT_MARGIN : 0);
     let closest = null, closestDist = HIT;
     for (const [id, pos] of Object.entries(this.board.config.nodes)) {
       const dx = bp.x - pos.x, dy = bp.y - pos.y;
@@ -1220,8 +1266,19 @@ class GameScene extends Phaser.Scene {
   // ─── Stubs for tasks 8, 10, 11 ───────────────────────────────────────────
 
   // Task 10.1 + 10.2: end-game overlay with "再来一局" button
+  //
+  // The existing "End-game overlay ... centered on the canvas" requirement
+  // (board-ui spec, unchanged by this delta) has to keep holding under the
+  // new portrait canvas dimensions too — this wasn't its own numbered task,
+  // but the overlay's landscape-hardcoded center/size would otherwise land
+  // wrong on the taller portrait canvas, so it's covered here.
   showResult(winner) {
-    const bg = this.add.rectangle(640, 400, 1280, 800, 0x000000, 0.75);
+    const cx = this.isPortrait ? PORTRAIT_CANVAS_WIDTH / 2 : CANVAS_WIDTH / 2;
+    const cy = this.isPortrait ? PORTRAIT_CANVAS_HEIGHT / 2 : CANVAS_HEIGHT / 2;
+    const w = this.isPortrait ? PORTRAIT_CANVAS_WIDTH : CANVAS_WIDTH;
+    const h = this.isPortrait ? PORTRAIT_CANVAS_HEIGHT : CANVAS_HEIGHT;
+
+    const bg = this.add.rectangle(cx, cy, w, h, 0x000000, 0.75);
     this.overlayObjects.push(bg);
 
     const resultText =
@@ -1229,7 +1286,7 @@ class GameScene extends Phaser.Scene {
     const resultColor =
       winner === "wolf" ? "#ff6666" : winner === "sheep" ? "#88ccff" : "#cccccc";
     const label = this.add
-      .text(640, 330, resultText, {
+      .text(cx, cy - 70, resultText, {
         fontSize: "52px",
         color: resultColor,
         fontFamily: '"Microsoft YaHei", "PingFang SC", sans-serif',
@@ -1238,7 +1295,7 @@ class GameScene extends Phaser.Scene {
     this.overlayObjects.push(label);
 
     const playAgainBtn = this.add
-      .text(640, 440, "再来一局", {
+      .text(cx, cy + 40, "再来一局", {
         fontSize: "28px",
         color: "#ffffff",
         backgroundColor: "#335533",
@@ -1498,6 +1555,156 @@ class GameScene extends Phaser.Scene {
     resignBtn.setFixedSize(w, h);
   }
 
+  // ─── Portrait layout (see design.md Decision 1: two independent layout
+  // builders rather than one shared, parameterized layout) ─────────────────
+
+  // Top band: turn/status text + restart/resign buttons, laid out in
+  // horizontal rows — the landscape right sidebar's content, rotated to fit
+  // the width now available instead of a narrow vertical column.
+  _initPortraitTopBand() {
+    const cx = PORTRAIT_CANVAS_WIDTH / 2;
+    const leftX = cx - 140;
+    const rightX = cx + 140;
+    const baseStyle = {
+      fontSize: "22px",
+      color: "#ffffff",
+      fontFamily: '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif',
+    };
+    const smallStyle = { ...baseStyle, fontSize: "16px", color: "#cccccc" };
+
+    this.hudObjects.turnLabel = this.add.text(leftX, 16, "", baseStyle).setOrigin(0.5, 0);
+    this.hudObjects.sheepCountLabel = this.add
+      .text(rightX, 16, "", { ...baseStyle, fontSize: "20px" })
+      .setOrigin(0.5, 0);
+    this.hudObjects.reserveLabel = this.add
+      .text(leftX, 48, "", smallStyle)
+      .setOrigin(0.5, 0)
+      .setVisible(false);
+    this.hudObjects.phaseLabel = this.add
+      .text(rightX, 48, "", smallStyle)
+      .setOrigin(0.5, 0)
+      .setVisible(false);
+    this.updateHUD();
+
+    const fontStyle = { fontSize: "20px", fontFamily: '"Microsoft YaHei", sans-serif' };
+    const btnFontStyle = { ...fontStyle, padding: { x: 22, y: 10 }, align: "center" };
+    const restartTextWidth = this._measureTextWidth("重新开始", fontStyle);
+    const resignTextWidth = this._measureTextWidth("认输", fontStyle);
+    const resignLetterSpacing = restartTextWidth - resignTextWidth;
+
+    const restartBtn = this.add
+      .text(leftX, 100, "重新开始", { ...btnFontStyle, color: "#cccccc", backgroundColor: "#2a2a3a" })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    restartBtn.on("pointerover", () => restartBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
+    restartBtn.on("pointerout",  () => restartBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
+    restartBtn.on("pointerdown", () => this.resetGame());
+
+    const resignBtn = this.add
+      .text(rightX, 100, "认输", {
+        ...btnFontStyle,
+        letterSpacing: resignLetterSpacing,
+        color: "#cccccc",
+        backgroundColor: "#2a2a3a",
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    resignBtn.on("pointerover", () => resignBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
+    resignBtn.on("pointerout",  () => resignBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
+    resignBtn.on("pointerdown", () => this.resign());
+
+    const w = Math.max(restartBtn.width, resignBtn.width);
+    const h = Math.max(restartBtn.height, resignBtn.height);
+    restartBtn.setFixedSize(w, h);
+    resignBtn.setFixedSize(w, h);
+  }
+
+  // Bottom band: mode + AI-difficulty selection, each a horizontal row of
+  // buttons — the landscape left sidebar's content, rotated the same way.
+  _initPortraitBottomBand() {
+    const cx = PORTRAIT_CANVAS_WIDTH / 2;
+    const baseY = PORTRAIT_TOP_HEIGHT + 800;
+    const xs = [cx - 267, cx, cx + 267];
+
+    const MODE_OPTS = [
+      { key: "wolf",  label: "玩家执狼" },
+      { key: "sheep", label: "玩家执羊" },
+      { key: "2p",    label: "双人对战" },
+    ];
+    const DIFFICULTY_OPTS = [
+      { key: "easy",   label: "简单" },
+      { key: "medium", label: "普通" },
+      { key: "hard",   label: "困难" },
+    ];
+
+    // Horizontally spread option buttons — mirrors landscape's
+    // `makeStackedBtns` closure, but varies x at a fixed y instead of y at a
+    // fixed x. Not shared with it; see design.md Decision 1.
+    const makeRowBtns = (opts, y, getActive, onSelect) => {
+      const btnObjs = opts.map((opt, i) => {
+        const active = getActive() === opt.key;
+        const btn = this.add
+          .text(xs[i], y, opt.label, {
+            fontSize: "18px",
+            color: active ? "#ffffff" : "#888888",
+            backgroundColor: active ? "#3355aa" : "#2a2a3a",
+            padding: { x: 16, y: 9 },
+            fontFamily: '"Microsoft YaHei", sans-serif',
+          })
+          .setOrigin(0.5)
+          .setInteractive({ useHandCursor: true });
+        return { btn, key: opt.key };
+      });
+      const refresh = () => {
+        btnObjs.forEach(({ btn, key }) => {
+          btn.setStyle({
+            color: getActive() === key ? "#ffffff" : "#888888",
+            backgroundColor: getActive() === key ? "#3355aa" : "#2a2a3a",
+          });
+        });
+      };
+      btnObjs.forEach(({ btn, key }) => {
+        btn.on("pointerdown", () => {
+          if (this.animating) return;
+          onSelect(key);
+          refresh();
+        });
+      });
+      return { btnObjs, refresh };
+    };
+
+    this.add.text(cx, baseY + 15, "游戏模式", {
+      fontSize: "16px", color: "#aaaaaa",
+      fontFamily: '"Microsoft YaHei", sans-serif',
+    }).setOrigin(0.5);
+
+    const modeRow = makeRowBtns(
+      MODE_OPTS, baseY + 50,
+      () => this.activeMode,
+      (key) => {
+        this.activeMode = key;
+        this.resetGame();
+        difficultyRow.refresh();
+      }
+    );
+
+    this.add.text(cx, baseY + 95, "AI 难度", {
+      fontSize: "16px", color: "#aaaaaa",
+      fontFamily: '"Microsoft YaHei", sans-serif',
+    }).setOrigin(0.5);
+
+    const difficultyRow = makeRowBtns(
+      DIFFICULTY_OPTS, baseY + 130,
+      () => this.difficulty,
+      (key) => {
+        this.difficulty = key;
+        this.ai.difficulty = key;
+        this.resetGame();
+        modeRow.refresh();
+      }
+    );
+  }
+
   update() {}
 }
 
@@ -1506,11 +1713,21 @@ class GameScene extends Phaser.Scene {
 // Task 4.1: landscape canvas (board + left/right sidebars), dark background
 const config = {
   type: Phaser.AUTO,
-  width: CANVAS_WIDTH,
-  height: CANVAS_HEIGHT,
+  width: isPortrait ? PORTRAIT_CANVAS_WIDTH : CANVAS_WIDTH,
+  height: isPortrait ? PORTRAIT_CANVAS_HEIGHT : CANVAS_HEIGHT,
   backgroundColor: 0x1a1a2e,
   parent: "game-container",
   scene: GameScene,
+  // Landscape: FIT scales both dimensions down to fit inside the viewport —
+  // nothing should overflow. Portrait: the logical canvas is deliberately
+  // taller than one viewport (top+board+bottom bands), so WIDTH_CONTROLS_HEIGHT
+  // scales to the viewport's width and lets the excess height overflow —
+  // that overflow is the scroll-to-reveal bottom settings band. See
+  // design.md Decision 3.
+  scale: {
+    mode: isPortrait ? Phaser.Scale.WIDTH_CONTROLS_HEIGHT : Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_HORIZONTALLY,
+  },
   // Snap object positions to whole pixels — the WebGL renderer otherwise
   // linear-filters textures (including text) sitting at fractional pixel
   // coordinates, which reads as blur even at correct texture resolution.
