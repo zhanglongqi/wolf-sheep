@@ -127,6 +127,50 @@ const PORTRAIT_CANVAS_HEIGHT = PORTRAIT_TOP_HEIGHT + 800 + PORTRAIT_BOTTOM_HEIGH
 // See design.md Decision 4.
 const PORTRAIT_HIT_MARGIN = 10;
 
+// ─── Stats persistence ────────────────────────────────────────────────────────
+
+// Task 1.1: storage key + bucket key. ":v1" lets a future incompatible schema
+// change move to ":v2" and leave old data orphaned, rather than needing a
+// migration — see design.md Decision 4.
+const STATS_STORAGE_KEY = "wolf-sheep:stats:v1";
+
+// Two-player mode has no difficulty axis (the AI is never invoked in "2p"),
+// so it gets a single shared bucket instead of being split three ways.
+function statsBucketKey(mode, difficulty) {
+  return mode === "2p" ? "2p" : `${mode}|${difficulty}`;
+}
+
+// Task 1.2: read/write/clear helpers. A missing key, unparseable JSON, or a
+// thrown access error (e.g. localStorage unavailable) all degrade to "no
+// stats" rather than throwing — this is low-stakes local data, not worth
+// failing the UI over. See design.md Decision 4.
+function readStats() {
+  try {
+    const raw = window.localStorage.getItem(STATS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeStats(stats) {
+  try {
+    window.localStorage.setItem(STATS_STORAGE_KEY, JSON.stringify(stats));
+  } catch {
+    // localStorage unavailable/full — stats just don't persist this time.
+  }
+}
+
+function clearStats() {
+  try {
+    window.localStorage.removeItem(STATS_STORAGE_KEY);
+  } catch {
+    // Nothing to do if localStorage itself is unavailable.
+  }
+}
+
 const BOARD_CONFIGS = {
   // Task 1.1 & 1.4
   grid5x5: {
@@ -684,6 +728,9 @@ class GameScene extends Phaser.Scene {
     this.overlayObjects = [];
     this.lastMoveGraphics = null;
     this.positionHistory = new Map();
+    // Task 2.1: per-game recording/overlay state — see design.md Decisions 1 & 3a.
+    this._resultRecorded = false;
+    this._resultOverlayWinner = null;
     this.ai = new AIPlayer(this.difficulty);
     this.sfx = new SFX();
     this.hudObjects = {};
@@ -1265,6 +1312,20 @@ class GameScene extends Phaser.Scene {
 
   // ─── Stubs for tasks 8, 10, 11 ───────────────────────────────────────────
 
+  // Task 2.2: increment the wolf-win/sheep-win/draw count for the current
+  // mode+difficulty bucket. Called (once per game — see the guard in
+  // showResult) for every ending path: natural win/loss, draw, or resignation.
+  _recordResult(winner) {
+    const key = statsBucketKey(this.activeMode, this.difficulty);
+    const stats = readStats();
+    const bucket = stats[key] || { wolfWins: 0, sheepWins: 0, draws: 0 };
+    if (winner === "wolf") bucket.wolfWins++;
+    else if (winner === "sheep") bucket.sheepWins++;
+    else bucket.draws++;
+    stats[key] = bucket;
+    writeStats(stats);
+  }
+
   // Task 10.1 + 10.2: end-game overlay with "再来一局" button
   //
   // The existing "End-game overlay ... centered on the canvas" requirement
@@ -1273,6 +1334,18 @@ class GameScene extends Phaser.Scene {
   // but the overlay's landscape-hardcoded center/size would otherwise land
   // wrong on the taller portrait canvas, so it's covered here.
   showResult(winner) {
+    // Task 2.3: record exactly once per game, no matter how many times this
+    // function re-renders (e.g. returning from the stats panel).
+    if (!this._resultRecorded) {
+      this._resultRecorded = true;
+      this._recordResult(winner);
+    }
+
+    // Task 3.2: replace whatever's currently in the overlay region (e.g. the
+    // stats panel, if this is a "back to result" re-render) rather than
+    // stacking a second overlay on top of it.
+    this._clearOverlayContent();
+
     const cx = this.isPortrait ? PORTRAIT_CANVAS_WIDTH / 2 : CANVAS_WIDTH / 2;
     const cy = this.isPortrait ? PORTRAIT_CANVAS_HEIGHT / 2 : CANVAS_HEIGHT / 2;
     const w = this.isPortrait ? PORTRAIT_CANVAS_WIDTH : CANVAS_WIDTH;
@@ -1295,7 +1368,7 @@ class GameScene extends Phaser.Scene {
     this.overlayObjects.push(label);
 
     const playAgainBtn = this.add
-      .text(cx, cy + 40, "再来一局", {
+      .text(cx - 90, cy + 40, "再来一局", {
         fontSize: "28px",
         color: "#ffffff",
         backgroundColor: "#335533",
@@ -1308,14 +1381,168 @@ class GameScene extends Phaser.Scene {
     playAgainBtn.on("pointerover", () => playAgainBtn.setStyle({ backgroundColor: "#447744" }));
     playAgainBtn.on("pointerout",  () => playAgainBtn.setStyle({ backgroundColor: "#335533" }));
     playAgainBtn.on("pointerdown", () => this.resetGame());
+
+    // Task 5.1: shortcut into the stats panel, checkable without first
+    // dismissing the result (which would restart the game).
+    const statsBtn = this.add
+      .text(cx + 90, cy + 40, "战绩", {
+        fontSize: "24px",
+        color: "#cccccc",
+        backgroundColor: "#2a2a3a",
+        padding: { x: 20, y: 10 },
+        fontFamily: '"Microsoft YaHei", sans-serif',
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    this.overlayObjects.push(statsBtn);
+    statsBtn.on("pointerover", () => statsBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
+    statsBtn.on("pointerout",  () => statsBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
+    statsBtn.on("pointerdown", () => this._showStatsPanel(this._statsPanelCloseCallback()));
+
+    // Task 3.2: track which result is currently shown so the persistent
+    // stats button (Decision 3a) and this overlay's own shortcut both know
+    // what to return to.
+    this._resultOverlayWinner = winner;
   }
 
-  // Task 10.3: tear down everything and re-initialise from current config
-  resetGame() {
+  // Task 3.3/6.2/7.2: the close/back callback for the stats panel depends on
+  // whether a result is currently showing (see design.md Decision 3a) — every
+  // entry point (the overlay's own shortcut, and both persistent buttons)
+  // shares this one computation instead of duplicating the branch.
+  _statsPanelCloseCallback() {
+    if (this._resultOverlayWinner != null) {
+      return () => this.showResult(this._resultOverlayWinner);
+    }
+    return () => {
+      this._clearOverlayContent();
+      this._resultOverlayWinner = null;
+    };
+  }
+
+  // Task 4.1: stats panel — one row per bucket (the two AI-opponent modes at
+  // each of the three difficulties, plus the single 2p bucket: 7 rows total,
+  // not 3×3 — 2p has no difficulty axis; see design.md Decision 3b), a
+  // clear-stats control, and a close/back control wired to whatever the
+  // caller decided (see _statsPanelCloseCallback).
+  _showStatsPanel(onClose) {
+    this._clearOverlayContent();
+
+    const cx = this.isPortrait ? PORTRAIT_CANVAS_WIDTH / 2 : CANVAS_WIDTH / 2;
+    const cy = this.isPortrait ? PORTRAIT_CANVAS_HEIGHT / 2 : CANVAS_HEIGHT / 2;
+    const w = this.isPortrait ? PORTRAIT_CANVAS_WIDTH : CANVAS_WIDTH;
+    const h = this.isPortrait ? PORTRAIT_CANVAS_HEIGHT : CANVAS_HEIGHT;
+
+    const bg = this.add.rectangle(cx, cy, w, h, 0x000000, 0.95);
+    this.overlayObjects.push(bg);
+
+    const title = this.add
+      .text(cx, cy - 260, "战绩", {
+        fontSize: "36px",
+        color: "#ffffff",
+        fontFamily: '"Microsoft YaHei", sans-serif',
+      })
+      .setOrigin(0.5);
+    this.overlayObjects.push(title);
+
+    const ROWS = [
+      { key: "wolf|easy", label: "玩家执狼 · 简单" },
+      { key: "wolf|medium", label: "玩家执狼 · 普通" },
+      { key: "wolf|hard", label: "玩家执狼 · 困难" },
+      { key: "sheep|easy", label: "玩家执羊 · 简单" },
+      { key: "sheep|medium", label: "玩家执羊 · 普通" },
+      { key: "sheep|hard", label: "玩家执羊 · 困难" },
+      { key: "2p", label: "双人对战" },
+    ];
+    const stats = readStats();
+
+    const headerY = cy - 210;
+    const rowHeight = 38;
+    const labelX = cx - 260;
+    const col1X = cx + 60;  // 狼胜
+    const col2X = cx + 160; // 羊胜
+    const col3X = cx + 260; // 平局
+    const textFont = '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif';
+    const headerStyle = { fontSize: "18px", color: "#aaaaaa", fontFamily: textFont };
+    const rowStyle = { fontSize: "22px", color: "#ffffff", fontFamily: textFont };
+
+    this.overlayObjects.push(
+      this.add.text(labelX, headerY, "模式", headerStyle).setOrigin(0, 0.5),
+      this.add.text(col1X, headerY, "狼胜", headerStyle).setOrigin(0.5),
+      this.add.text(col2X, headerY, "羊胜", headerStyle).setOrigin(0.5),
+      this.add.text(col3X, headerY, "平局", headerStyle).setOrigin(0.5)
+    );
+
+    // Zebra striping: rows span a wide horizontal distance (label all the
+    // way out to the 平局 column), so a faint alternating background makes
+    // it easy to track one row across the columns without losing your place.
+    const stripeLeft = labelX - 10;
+    const stripeRight = col3X + 40;
+    const stripeCenterX = (stripeLeft + stripeRight) / 2;
+    const stripeWidth = stripeRight - stripeLeft;
+
+    ROWS.forEach((row, i) => {
+      const y = headerY + rowHeight * (i + 1);
+      const bucket = stats[row.key] || { wolfWins: 0, sheepWins: 0, draws: 0 };
+      if (i % 2 === 1) {
+        const stripe = this.add.rectangle(stripeCenterX, y, stripeWidth, rowHeight - 4, 0xffffff, 0.06);
+        this.overlayObjects.push(stripe);
+      }
+      this.overlayObjects.push(
+        this.add.text(labelX, y, row.label, rowStyle).setOrigin(0, 0.5),
+        this.add.text(col1X, y, String(bucket.wolfWins), rowStyle).setOrigin(0.5),
+        this.add.text(col2X, y, String(bucket.sheepWins), rowStyle).setOrigin(0.5),
+        this.add.text(col3X, y, String(bucket.draws), rowStyle).setOrigin(0.5)
+      );
+    });
+
+    const buttonsY = headerY + rowHeight * (ROWS.length + 1) + 40;
+    const btnStyle = {
+      fontSize: "20px",
+      padding: { x: 16, y: 8 },
+      fontFamily: '"Microsoft YaHei", sans-serif',
+    };
+
+    // Task 4.2: clear stats, then redraw this same panel in place — stays
+    // open so the zeroed totals are visible immediately.
+    const clearBtn = this.add
+      .text(cx - 90, buttonsY, "清空战绩", { ...btnStyle, color: "#cccccc", backgroundColor: "#2a2a3a" })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    this.overlayObjects.push(clearBtn);
+    clearBtn.on("pointerover", () => clearBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
+    clearBtn.on("pointerout",  () => clearBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
+    clearBtn.on("pointerdown", () => {
+      clearStats();
+      this._showStatsPanel(onClose);
+    });
+
+    // Task 4.3: "返回" when there's a result to return to, "关闭" otherwise.
+    const closeLabel = this._resultOverlayWinner != null ? "返回" : "关闭";
+    const closeBtn = this.add
+      .text(cx + 90, buttonsY, closeLabel, { ...btnStyle, color: "#ffffff", backgroundColor: "#335533" })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    this.overlayObjects.push(closeBtn);
+    closeBtn.on("pointerover", () => closeBtn.setStyle({ backgroundColor: "#447744" }));
+    closeBtn.on("pointerout",  () => closeBtn.setStyle({ backgroundColor: "#335533" }));
+    closeBtn.on("pointerdown", onClose);
+  }
+
+  // Task 3.1: destroy every object currently shown in the overlay region and
+  // empty the array, without touching board/game state. Used both by
+  // resetGame() (as part of a full teardown) and by showResult()/
+  // _showStatsPanel() (to swap the overlay's content in place — see
+  // design.md Decision 2).
+  _clearOverlayContent() {
     for (const o of this.overlayObjects) {
       if (o && typeof o.destroy === "function") o.destroy();
     }
     this.overlayObjects = [];
+  }
+
+  // Task 10.3: tear down everything and re-initialise from current config
+  resetGame() {
+    this._clearOverlayContent();
 
     for (const piece of [...this.board.wolves, ...this.board.sheep]) {
       if (piece.graphics) { piece.graphics.destroy(); piece.graphics = null; }
@@ -1323,6 +1550,8 @@ class GameScene extends Phaser.Scene {
     if (this.boardGraphics) { this.boardGraphics.destroy(); this.boardGraphics = null; }
     if (this.lastMoveGraphics) { this.lastMoveGraphics.destroy(); this.lastMoveGraphics = null; }
     this.positionHistory = new Map();
+    this._resultRecorded = false;
+    this._resultOverlayWinner = null;
 
     this.clearHighlights();
     this.selected = null;
@@ -1515,12 +1744,15 @@ class GameScene extends Phaser.Scene {
     const fontStyle = { fontSize: "20px", fontFamily: '"Microsoft YaHei", sans-serif' };
     const btnFontStyle = { ...fontStyle, padding: { x: 22, y: 10 }, align: "center" };
 
-    // "认输" is only two characters where "重新开始" is four; stretching its
-    // one gap so the glyph run spans the same width as "重新开始" (rather than
-    // a small fixed gap) makes the two labels line up as a matched pair.
+    // "认输"/"战绩" are only two characters where "重新开始" is four;
+    // stretching their one gap so the glyph run spans the same width as
+    // "重新开始" (rather than a small fixed gap) makes all three labels line
+    // up as a matched set.
     const restartTextWidth = this._measureTextWidth("重新开始", fontStyle);
     const resignTextWidth = this._measureTextWidth("认输", fontStyle);
+    const statsTextWidth = this._measureTextWidth("战绩", fontStyle);
     const resignLetterSpacing = restartTextWidth - resignTextWidth;
+    const statsLetterSpacing = restartTextWidth - statsTextWidth;
 
     const restartBtn = this.add
       .text(cx, 620, "重新开始", {
@@ -1547,12 +1779,30 @@ class GameScene extends Phaser.Scene {
     resignBtn.on("pointerout",  () => resignBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
     resignBtn.on("pointerdown", () => this.resign());
 
-    // Both labels now occupy matching glyph-run widths, but pin both to the
-    // same pill footprint too so rounding differences can't show through.
-    const w = Math.max(restartBtn.width, resignBtn.width);
-    const h = Math.max(restartBtn.height, resignBtn.height);
+    // Task 6.1/6.2: third button, same width-matching treatment, below the
+    // existing pair. Its close callback depends on whether a result is
+    // currently showing — see design.md Decision 3a / _statsPanelCloseCallback.
+    const statsBtn = this.add
+      .text(cx, 740, "战绩", {
+        ...btnFontStyle,
+        letterSpacing: statsLetterSpacing,
+        color: "#cccccc",
+        backgroundColor: "#2a2a3a",
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    statsBtn.on("pointerover", () => statsBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
+    statsBtn.on("pointerout",  () => statsBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
+    statsBtn.on("pointerdown", () => this._showStatsPanel(this._statsPanelCloseCallback()));
+
+    // All three labels now occupy matching glyph-run widths, but pin all
+    // three to the same pill footprint too so rounding differences can't
+    // show through.
+    const w = Math.max(restartBtn.width, resignBtn.width, statsBtn.width);
+    const h = Math.max(restartBtn.height, resignBtn.height, statsBtn.height);
     restartBtn.setFixedSize(w, h);
     resignBtn.setFixedSize(w, h);
+    statsBtn.setFixedSize(w, h);
   }
 
   // ─── Portrait layout (see design.md Decision 1: two independent layout
@@ -1586,14 +1836,33 @@ class GameScene extends Phaser.Scene {
       .setVisible(false);
     this.updateHUD();
 
+    // Task 7.1: three buttons — 战绩 / 重新开始 / 认输 — in one row instead of
+    // the previous two, all width-matched to the widest label. Kept at the
+    // same y=100 so PORTRAIT_TOP_HEIGHT doesn't need to change.
+    const statsX = cx - 220, midX = cx, resignX = cx + 220;
     const fontStyle = { fontSize: "20px", fontFamily: '"Microsoft YaHei", sans-serif' };
     const btnFontStyle = { ...fontStyle, padding: { x: 22, y: 10 }, align: "center" };
     const restartTextWidth = this._measureTextWidth("重新开始", fontStyle);
     const resignTextWidth = this._measureTextWidth("认输", fontStyle);
+    const statsTextWidth = this._measureTextWidth("战绩", fontStyle);
     const resignLetterSpacing = restartTextWidth - resignTextWidth;
+    const statsLetterSpacing = restartTextWidth - statsTextWidth;
+
+    const statsBtn = this.add
+      .text(statsX, 100, "战绩", {
+        ...btnFontStyle,
+        letterSpacing: statsLetterSpacing,
+        color: "#cccccc",
+        backgroundColor: "#2a2a3a",
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    statsBtn.on("pointerover", () => statsBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
+    statsBtn.on("pointerout",  () => statsBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
+    statsBtn.on("pointerdown", () => this._showStatsPanel(this._statsPanelCloseCallback()));
 
     const restartBtn = this.add
-      .text(leftX, 100, "重新开始", { ...btnFontStyle, color: "#cccccc", backgroundColor: "#2a2a3a" })
+      .text(midX, 100, "重新开始", { ...btnFontStyle, color: "#cccccc", backgroundColor: "#2a2a3a" })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
     restartBtn.on("pointerover", () => restartBtn.setStyle({ backgroundColor: "#3a3a4e", color: "#ffffff" }));
@@ -1601,7 +1870,7 @@ class GameScene extends Phaser.Scene {
     restartBtn.on("pointerdown", () => this.resetGame());
 
     const resignBtn = this.add
-      .text(rightX, 100, "认输", {
+      .text(resignX, 100, "认输", {
         ...btnFontStyle,
         letterSpacing: resignLetterSpacing,
         color: "#cccccc",
@@ -1613,10 +1882,11 @@ class GameScene extends Phaser.Scene {
     resignBtn.on("pointerout",  () => resignBtn.setStyle({ backgroundColor: "#2a2a3a", color: "#cccccc" }));
     resignBtn.on("pointerdown", () => this.resign());
 
-    const w = Math.max(restartBtn.width, resignBtn.width);
-    const h = Math.max(restartBtn.height, resignBtn.height);
+    const w = Math.max(restartBtn.width, resignBtn.width, statsBtn.width);
+    const h = Math.max(restartBtn.height, resignBtn.height, statsBtn.height);
     restartBtn.setFixedSize(w, h);
     resignBtn.setFixedSize(w, h);
+    statsBtn.setFixedSize(w, h);
   }
 
   // Bottom band: mode + AI-difficulty selection, each a horizontal row of
