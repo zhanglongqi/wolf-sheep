@@ -23,9 +23,11 @@ mainly guards against regressions when the AI or rules change later.
 
 ## 步数 / 最快获胜统计
 
-Deferred out of the 战绩持久化 change (`mode+difficulty` win/loss/draw counts,
-plus a stats panel and end-game-overlay shortcut) — that one only tracks
-win/loss/draw. This would add a per-game move counter and a "fastest win"
+Deferred out of `game-stats` (archived at
+`openspec/changes/archive/2026-08-29-game-stats/`; `mode+difficulty`
+win/loss/draw counts, plus a stats panel and end-game-overlay shortcut) —
+that one only tracks win/loss/draw. This would add a per-game move counter
+and a "fastest win"
 record on top of it. Needs new instrumentation `game.js` doesn't have yet: a
 move counter wired into `executeAction`/`executeAITurn`, and a start
 timestamp set in `create()`/`resetGame()`. Open question carried over from
@@ -34,9 +36,9 @@ tabbing away) or wall-clock time (more intuitive, noisier)?
 
 ## 工程健康度
 
-`src/game.js` is 1521 lines in one file — `design.md`'s original call ("too
-small to bother splitting") was made when the file was a fraction of this
-size and is worth revisiting.
+`src/game.js` is 2008 lines in one file (up from ~1521 after `game-stats`) —
+`design.md`'s original call ("too small to bother splitting") was made when
+the file was a fraction of this size and is worth revisiting.
 
 ## 视听打磨
 
