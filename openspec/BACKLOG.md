@@ -14,13 +14,6 @@ from-scratch design. `Board.placeSheep()` and the placement-phase flag already
 exist in the engine and just need a config with `sheepReserve > 0` to exercise
 them.
 
-## 规则逻辑单测
-
-`Board` and `AIPlayer` are pure logic classes with no Phaser dependency —
-jump-capture legality, the block-off rule, win/draw detection are all testable
-without a canvas. Zero test coverage today. Lowest-risk item on this list;
-mainly guards against regressions when the AI or rules change later.
-
 ## 步数 / 最快获胜统计
 
 Deferred out of `game-stats` (archived at
@@ -36,9 +29,12 @@ tabbing away) or wall-clock time (more intuitive, noisier)?
 
 ## 工程健康度
 
-`src/game.js` is 2008 lines in one file (up from ~1521 after `game-stats`) —
+`src/game.js` is down to 1641 lines after `add-rule-logic-tests` pulled the
+pure rule engine and AI out into `src/board.js` (367 lines) — but that split
+was driven by testability, not file-size hygiene, and `game.js` still bundles
+`GameScene`, `SFX`, the cartoon-art functions, and stats persistence together.
 `design.md`'s original call ("too small to bother splitting") was made when
-the file was a fraction of this size and is worth revisiting.
+the file was a fraction of even the current size and is worth revisiting.
 
 ## 视听打磨
 
