@@ -27,15 +27,6 @@ timestamp set in `create()`/`resetGame()`. Open question carried over from
 that exploration: rank "fastest" by move count (clean, immune to the player
 tabbing away) or wall-clock time (more intuitive, noisier)?
 
-## 工程健康度
-
-`src/game.js` is down to 1641 lines after `add-rule-logic-tests` pulled the
-pure rule engine and AI out into `src/board.js` (367 lines) — but that split
-was driven by testability, not file-size hygiene, and `game.js` still bundles
-`GameScene`, `SFX`, the cartoon-art functions, and stats persistence together.
-`design.md`'s original call ("too small to bother splitting") was made when
-the file was a fraction of even the current size and is worth revisiting.
-
 ## 视听打磨
 
 Mute/volume toggle for the synthesized SFX (currently no way to silence it).
